@@ -50,6 +50,10 @@ RUN groupadd -r sduser --gid=1000 && \
 # Copy application code from the builder stage.
 # The --chown flag ensures the non-root user owns the files immediately.
 COPY --from=builder --chown=sduser:sduser /workspace/ComfyUI /workspace/ComfyUI
+# Install runtime dependencies for our scripts.
+# - jq: A lightweight and flexible command-line JSON processor.
+# - aria2: A high-speed download utility.
+RUN apt-get update && apt-get install -y --no-install-recommends jq aria2 && rm -rf /var/lib/apt/lists/*
 
 # Copy our custom scripts and configuration into the final image.
 COPY --chown=sduser:sduser scripts/ /usr/local/bin/scripts/

@@ -1,0 +1,11 @@
+# Ignore unnecessary files
+Dockerfile
+.dockerignore
+.git
+.gitignore
+*.md
+*.log
+__pycache__
+.pytest_cache
+venv
+.env

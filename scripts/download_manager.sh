@@ -14,7 +14,7 @@ log_download() {
     echo "  [DOWNLOAD] $1"
 }
 
-# --- Hugging Face Downloader ---
+# --- Hugging Face Downloader (IMPROVED with Graceful Error Handling) ---
 download_hf_repos() {
     # Check for Hugging Face token
     local token_arg=""
@@ -30,13 +30,28 @@ download_hf_repos() {
         if [ -z "$repo_id" ]; then continue; fi
 
         log_download "Starting HF download: ${repo_id}"
-        # Download using huggingface-cli to a temp sub-directory
-        huggingface-cli download \
+        
+        # --- Graceful Failure Block ---
+        # We attempt the download. If the command fails (returns non-zero),
+        # we catch it, print a helpful message, and continue to the next repo.
+        if ! huggingface-cli download \
             "${repo_id}" \
             --local-dir "${DOWNLOAD_TMP_DIR}/${repo_id}" \
             --local-dir-use-symlinks False \
             --resume-download \
-            ${token_arg}
+            ${token_arg} &> /dev/null; then
+
+            log_download "❌ ERROR: Failed to download '${repo_id}'."
+            if [ -z "${HUGGINGFACE_TOKEN:-}" ]; then
+                log_download "   HINT: This is likely a private/gated repository. Please provide a"
+                log_download "   HUGGINGFACE_TOKEN via RunPod Secrets ('huggingface.co')."
+            else
+                log_download "   HINT: Please check if your token is valid and has access to this repository."
+            fi
+            # Continue to the next loop iteration instead of exiting the script.
+            continue
+        fi
+        
         log_download "✅ Completed HF download: ${repo_id}"
     done
 }

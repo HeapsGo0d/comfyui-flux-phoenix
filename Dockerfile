@@ -43,7 +43,7 @@ LABEL description="Production image for Project Phoenix (ComfyUI) - v1.3"
 
 # --- SECURITY & PERFORMANCE SETUP ---
 # Set default ComfyUI arguments for performance optimization.
-ENV COMFY_ARGS="--bf16-unet --use-flash-attention-2"
+ENV COMFY_ARGS="--bf16-unet"
 
 # Create a non-root user 'sduser' and apply a restrictive umask by default.
 RUN groupadd -r sduser --gid=1000 && \

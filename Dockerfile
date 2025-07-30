@@ -25,9 +25,8 @@ RUN . /etc/phoenix/versions.conf && \
     rm -rf .git
 
 # --- INSTALL FILE BROWSER ---
-# Download the File Browser binary and move it to a standard executable path.
-RUN curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash && \
-    mv ./filebrowser /usr/local/bin/filebrowser
+# The official installer script downloads the binary and places it in /usr/local/bin automatically.
+RUN curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash
 
 
 # ==============================================================================
@@ -40,7 +39,7 @@ ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
 LABEL maintainer="Project Phoenix Team <your-email@example.com>"
-LABEL description="Production image for Project Phoenix (ComfyUI) - v1.2"
+LABEL description="Production image for Project Phoenix (ComfyUI) - v1.3"
 
 # --- SECURITY & PERFORMANCE SETUP ---
 # Set default ComfyUI arguments for performance optimization.

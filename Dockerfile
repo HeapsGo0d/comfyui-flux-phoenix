@@ -5,9 +5,9 @@ FROM ${BASE_IMAGE} AS builder
 
 LABEL stage="builder"
 
-# Install git, a build-time dependency, to clone the repository.
+
 # We clean up apt-get lists to keep the layer small.
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends git jq aria2 && rm -rf /var/lib/apt/lists/*
 
 # --- VERSION PINNING LOGIC ---
 # Copy the version configuration file into the builder stage.

@@ -24,6 +24,11 @@ RUN . /etc/phoenix/versions.conf && \
 
 # --- END VERSION PINNING ---
 
+# --- INSTALL FILE BROWSER ---
+# Download the File Browser binary, verify its checksum, and make it executable.
+# We do this in the builder stage to keep the final image clean.
+RUN curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash && \
+    mv ./filebrowser /usr/local/bin/filebrowser
 
 # Stage 2: Final Production Image - Optimized for size, security, and performance.
 # We declare the ARG again as it's not inherited across stages automatically.
@@ -50,6 +55,11 @@ RUN groupadd -r sduser --gid=1000 && \
 # Copy application code from the builder stage.
 # The --chown flag ensures the non-root user owns the files immediately.
 COPY --from=builder --chown=sduser:sduser /workspace/ComfyUI /workspace/ComfyUI
+
+
+# Copy the pre-downloaded filebrowser binary from the builder stage.
+COPY --from=builder /usr/local/bin/filebrowser /usr/local/bin/filebrowser
+
 # Install runtime dependencies for our scripts.
 # - jq: A lightweight and flexible command-line JSON processor.
 # - aria2: A high-speed download utility.

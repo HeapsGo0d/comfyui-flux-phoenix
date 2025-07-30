@@ -6,7 +6,7 @@
 # temporary download directory to their final destinations in the ComfyUI structure.
 
 # --- Global Variables & Setup ---
-readonly DOWNLOAD_TMP_DIR="/workspace/downloads_tmp"
+
 readonly MODELS_DIR="${STORAGE_ROOT}/models"
 
 # --- Logging Function ---

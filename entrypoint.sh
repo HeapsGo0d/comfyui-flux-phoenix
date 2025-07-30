@@ -8,7 +8,8 @@
 # The return value of a pipeline is the status of the last command to exit with a
 # non-zero status, or zero if no command failed.
 set -euo pipefail
-
+# Disable core dumps to prevent memory from being written to disk on crash.
+ulimit -c 0
 # ==================================================================================
 # SECTION 2: SIGNAL TRAPPING
 # ==================================================================================

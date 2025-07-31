@@ -10,6 +10,7 @@ set -euo pipefail
 # ⚠️ IMPORTANT: Update this to your Docker Hub username and image name.
 readonly IMAGE_NAME="joyc0025/comfyui-flux-phoenix:v1.2-test3"
 readonly TEMPLATE_NAME="ComfyUI FLUX - Project Phoenix"
+readonly CUSTOM_DNS_SERVERS="${CUSTOM_DNS_SERVERS:-"8.8.8.8,1.1.1.1"}" # Default to Google and Cloudflare
 
 # ─── Pre-flight Checks ──────────────────────────────────────────────────────
 if [[ -z "${RUNPOD_API_KEY:-}" ]]; then
@@ -71,13 +72,20 @@ EOF
 
 # ─── API Payload Construction ───────────────────────────────────────────────
 # Build the final JSON payload using jq for safety and correctness.
+# Build the docker arguments string dynamically
+docker_args="--security-opt=no-new-privileges --cap-drop=ALL"
+IFS=',' read -ra dns_servers <<< "$CUSTOM_DNS_SERVERS"
+for server in "${dns_servers[@]}"; do
+  docker_args+=" --dns=$server"
+done
+
 PAYLOAD=$(jq -n \
   --arg name "$TEMPLATE_NAME" \
   --arg imageName "$IMAGE_NAME" \
   --argjson cDisk 150 \
   --argjson vGb 0 \
   --arg vPath "/runpod-volume" \
-  --arg dArgs "--security-opt=no-new-privileges --cap-drop=ALL --dns=8.8.8.8 --dns=1.1.1.1" \
+  --arg dArgs "$docker_args" \
   --arg ports "8188/http,8080/http" \
   --arg readme "$README_CONTENT" \
   --arg query "$GRAPHQL_QUERY" \

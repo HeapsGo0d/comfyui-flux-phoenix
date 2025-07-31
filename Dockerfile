@@ -13,8 +13,8 @@ LABEL stage="builder"
 # Install build-time dependencies:
 # - git: Required to clone the ComfyUI repository.
 # - curl: Required to download the File Browser installation script.
-# Set up DNS to prevent resolution issues in some environments
-RUN echo "nameserver 8.8.8.8" > /etc/resolv.conf && echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+# The /etc/resolv.conf file is managed by the container runtime and is read-only during build.
+# Custom DNS should be configured at runtime (e.g., via Docker's --dns flag or environment variables).
 
 RUN apt-get update && apt-get install -y --no-install-recommends git curl && rm -rf /var/lib/apt/lists/*
 

@@ -66,10 +66,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends jq aria2 && rm 
 # Copy our custom scripts into the final image and make them executable.
 COPY --chown=sduser:sduser scripts/ /usr/local/bin/scripts/
 COPY --chown=sduser:sduser entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/scripts/*.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/scripts/*.sh && chmod +x /usr/local/bin/scripts/*.py
 
 # Install Python dependencies from the list included with ComfyUI.
 RUN pip install --no-cache-dir -r /workspace/ComfyUI/requirements.txt
+RUN pip install --no-cache-dir requests
 
 # --- FINALIZATION ---
 # Set the final working directory for the application.

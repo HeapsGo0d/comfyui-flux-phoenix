@@ -8,7 +8,7 @@ set -euo pipefail
 
 # ─── Configuration ──────────────────────────────────────────────────────────
 # ⚠️ IMPORTANT: Update this to your Docker Hub username and image name.
-readonly IMAGE_NAME="joyc0025/comfyui-flux-phoenix:v1.2-test1"
+readonly IMAGE_NAME="joyc0025/comfyui-flux-phoenix:v1.2-test3"
 readonly TEMPLATE_NAME="ComfyUI FLUX - Project Phoenix"
 
 # ─── Pre-flight Checks ──────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ PAYLOAD=$(jq -n \
   --argjson cDisk 150 \
   --argjson vGb 0 \
   --arg vPath "/runpod-volume" \
-  --arg dArgs "--security-opt=no-new-privileges --cap-drop=ALL" \
+  --arg dArgs "--security-opt=no-new-privileges --cap-drop=ALL --dns=8.8.8.8 --dns=1.1.1.1" \
   --arg ports "8188/http,8080/http" \
   --arg readme "$README_CONTENT" \
   --arg query "$GRAPHQL_QUERY" \

@@ -103,6 +103,29 @@ check_service_health() {
     done
 }
 
+# --- Network Health Check ---
+check_network() {
+    echo "  Checking network connectivity..."
+    local attempts=0
+    local max_attempts=10
+    local target_host="google.com"
+
+    until nslookup "${target_host}" >/dev/null 2>&1; do
+        attempts=$((attempts + 1))
+        if [ $attempts -ge $max_attempts ]; then
+            echo "  ❌ Network check failed after ${max_attempts} attempts."
+            echo "     Could not resolve ${target_host}. Please check DNS and network settings."
+            # In non-interactive environments, we might want to exit.
+            # For this testing entrypoint, we'll just warn and continue.
+            return 1
+        fi
+        echo "  ⚠️ Network not ready, retrying in 5 seconds... (attempt ${attempts}/${max_attempts})"
+        sleep 5
+    done
+    echo "  ✅ Network is ready."
+    return 0
+}
+
 # --- Main Orchestration ---
 main() {
     echo "🚀 Phoenix Entrypoint: Starting in NO-FAIL testing mode..."
@@ -122,6 +145,12 @@ main() {
         exit 1
     fi
     
+    # Step 1.5: Network Check
+    if ! check_network; then
+        echo "⚠️ Network check failed, but continuing in NO-FAIL mode."
+        # In a production entrypoint, you would likely 'exit 1' here.
+    fi
+
     # Step 2: Download Manager (OPTIONAL - failures are acceptable)
     if ! run_component "Download Manager" "${SCRIPT_DIR}/download_manager.sh" "false"; then
         echo "⚠️ Download manager had issues - continuing anyway"

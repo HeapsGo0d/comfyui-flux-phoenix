@@ -10,6 +10,8 @@ import subprocess
 import sys
 import json
 from pathlib import Path
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 class PhoenixDownloader:
@@ -17,7 +19,22 @@ class PhoenixDownloader:
         self.debug_mode = debug_mode
         self.download_tmp_dir = Path("/workspace/downloads_tmp")
         self.download_tmp_dir.mkdir(exist_ok=True)
-        
+        self.session = self._create_session()
+
+    def _create_session(self):
+        """Create a requests session with retry logic."""
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=5,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "OPTIONS"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        return session
+
     def log(self, message, is_debug=False):
         """Logging function with debug support"""
         prefix = "[DOWNLOAD-DEBUG]" if is_debug else "[DOWNLOAD]"
@@ -97,9 +114,9 @@ class PhoenixDownloader:
         self.log(f"Fetching metadata from: {api_url}", is_debug=True)
         
         try:
-            response = requests.get(api_url, headers=headers, timeout=30)
+            response = self.session.get(api_url, headers=headers, timeout=30)
             response.raise_for_status()
-            
+
             if response.status_code == 200:
                 data = response.json()
                 if 'files' in data and data['files']:

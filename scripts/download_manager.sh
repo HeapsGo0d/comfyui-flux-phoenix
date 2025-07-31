@@ -1,421 +1,267 @@
 #!/bin/bash
 # ==================================================================================
-# PHOENIX: GRACEFUL DOWNLOAD MANAGER (NO-FAIL MODE)
+# PHOENIX: DOWNLOAD MANAGER SCRIPT (FIXED)
 # ==================================================================================
-# This script handles downloads gracefully - failures don't crash the container
+# This script is sourced by entrypoint.sh. It handles downloading all required
+# models and files from Hugging Face and Civitai based on ENV VARS.
 
-# --- Safety Setup ---
-set -euo pipefail
-umask 077
+# --- Global Variables & Setup ---
+readonly DOWNLOAD_TMP_DIR="/workspace/downloads_tmp"
+mkdir -p "${DOWNLOAD_TMP_DIR}"
 
 # --- Logging Function ---
 log_download() {
     echo "  [DOWNLOAD] $1"
 }
 
-# --- Configuration Validation ---
-validate_configuration() {
-    log_download "Validating download configuration..."
-    
-    # Check essential environment
-    if [ -z "${DOWNLOAD_TMP_DIR:-}" ]; then
-        log_download "❌ ERROR: DOWNLOAD_TMP_DIR not set"
-        return 1
-    fi
-    
-    if [ -z "${STORAGE_ROOT:-}" ]; then
-        log_download "❌ ERROR: STORAGE_ROOT not set"
-        return 1
-    fi
-    
-    # Create/verify download directory
-    mkdir -p "${DOWNLOAD_TMP_DIR}"
-    chmod 700 "${DOWNLOAD_TMP_DIR}"
-    
-    # Check available space
-    local available_gb=$(df -BG "${DOWNLOAD_TMP_DIR}" | awk 'NR==2 {print $4}' | sed 's/G//')
-    log_download "Available storage: ${available_gb}GB"
-    
-    if [ "$available_gb" -lt 10 ]; then
-        log_download "⚠️ WARNING: Low storage space (${available_gb}GB)"
-        log_download "   Large model downloads may fail"
-    fi
-    
-    return 0
-}
-
-# --- Token Status Check ---
-check_token_status() {
-    local service="$1"
-    local token_var="$2"
-    local token_value="${!token_var:-}"
-    
-    if [ -n "$token_value" ]; then
-        if [ ${#token_value} -gt 10 ]; then
-            log_download "✅ ${service} token: Available (${#token_value} chars)"
-            return 0
-        else
-            log_download "⚠️ ${service} token: Too short (${#token_value} chars) - likely invalid"
-            return 1
-        fi
-    else
-        log_download "ℹ️ ${service} token: Not provided - only public content accessible"
-        return 1
+# --- Debug Logging Function ---
+debug_log() {
+    if [ "${DEBUG_MODE:-false}" = "true" ]; then
+        echo "  [DOWNLOAD-DEBUG] $1"
     fi
 }
 
-# --- Robust HuggingFace Downloader ---
+# --- Hugging Face Downloader (IMPROVED with Better Error Handling) ---
 download_hf_repos() {
-    log_download "=== HUGGINGFACE DOWNLOAD PHASE ==="
-    
-    # Check for repos to download
-    local repos_raw="${HF_REPOS_TO_DOWNLOAD:-}"
-    if [ -z "$repos_raw" ]; then
-        log_download "No HuggingFace repositories specified. Skipping."
+    # Skip if no repos specified
+    if [ -z "${HF_REPOS_TO_DOWNLOAD:-}" ]; then
+        log_download "No Hugging Face repos specified to download."
         return 0
     fi
-    
-    # Check token status
-    local has_token=false
-    if check_token_status "HuggingFace" "HUGGINGFACE_TOKEN"; then
-        has_token=true
-        export HUGGING_FACE_HUB_TOKEN="${HUGGINGFACE_TOKEN}"
+
+    # Check for Hugging Face token
+    local token_arg=""
+    if [ -n "${HUGGINGFACE_TOKEN:-}" ]; then
+        token_arg="--token ${HUGGINGFACE_TOKEN}"
+        debug_log "Using provided HuggingFace token"
+    else
+        debug_log "No HuggingFace token provided"
     fi
+
+    log_download "Found Hugging Face repos to download..."
     
-    # Parse repository list
-    repos_raw=$(echo "$repos_raw" | tr ',' ' ' | tr -s ' ')
-    local -a repos
-    read -ra repos <<< "$repos_raw"
-    
-    log_download "Processing ${#repos[@]} HuggingFace repositories..."
-    
-    local success_count=0
-    local total_count=${#repos[@]}
-    
+    # Read the comma-separated list of repos
+    IFS=',' read -ra repos <<< "${HF_REPOS_TO_DOWNLOAD}"
     for repo_id in "${repos[@]}"; do
+        # Trim whitespace
         repo_id=$(echo "${repo_id}" | xargs)
         if [ -z "$repo_id" ]; then continue; fi
+
+        log_download "Starting HF download: ${repo_id}"
+        debug_log "Download directory: ${DOWNLOAD_TMP_DIR}/${repo_id}"
         
-        # Validate repo ID format
-        if [[ ! "$repo_id" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]; then
-            log_download "⚠️ Invalid repository format: $repo_id (skipping)"
-            continue
-        fi
+        # --- Improved Error Handling ---
+        # Create a more detailed download command with progress in debug mode
+        local download_cmd="huggingface-cli download \"${repo_id}\" --local-dir \"${DOWNLOAD_TMP_DIR}/${repo_id}\" --local-dir-use-symlinks False --resume-download ${token_arg}"
         
-        log_download "Downloading: ${repo_id}"
-        
-        local repo_dir="${DOWNLOAD_TMP_DIR}/hf_${repo_id//\//_}"
-        
-        # Check if already exists
-        if [ -d "$repo_dir" ] && [ "$(ls -A "$repo_dir" 2>/dev/null)" ]; then
-            log_download "✅ Repository already exists: ${repo_id}"
-            success_count=$((success_count + 1))
-            continue
-        fi
-        
-        # Create repo directory
-        mkdir -p "$repo_dir"
-        
-        # Attempt download with retries
-        local download_success=false
-        local max_attempts=3
-        
-        for attempt in $(seq 1 $max_attempts); do
-            if [ $attempt -gt 1 ]; then
-                log_download "Retry ${attempt}/${max_attempts} for ${repo_id}"
-                sleep $((attempt * 5))
-            fi
-            
-            # Download with timeout and error handling
-            local download_cmd="huggingface-cli download \"${repo_id}\" --local-dir \"${repo_dir}\" --local-dir-use-symlinks False --resume-download"
-            
-            if [ "$has_token" = true ]; then
-                download_cmd="${download_cmd} --token \$HUGGING_FACE_HUB_TOKEN"
-            fi
-            
-            if timeout 1800 bash -c "$download_cmd" >/dev/null 2>&1; then
-                download_success=true
-                break
-            else
-                log_download "Attempt ${attempt} failed for ${repo_id}"
-                # Clean up partial download
-                rm -rf "$repo_dir"
-                mkdir -p "$repo_dir"
-            fi
-        done
-        
-        if [ "$download_success" = true ]; then
-            log_download "✅ Successfully downloaded: ${repo_id}"
-            success_count=$((success_count + 1))
-            
-            # Show download size in debug mode
-            if [ "${DEBUG_MODE:-false}" = "true" ]; then
-                local repo_size=$(du -sh "$repo_dir" 2>/dev/null | cut -f1 || echo "unknown")
-                local file_count=$(find "$repo_dir" -type f | wc -l)
-                log_download "  Size: ${repo_size}, Files: ${file_count}"
+        if [ "${DEBUG_MODE:-false}" = "true" ]; then
+            debug_log "Running: $download_cmd"
+            # Show progress in debug mode
+            if ! eval "$download_cmd"; then
+                log_download "❌ ERROR: Failed to download '${repo_id}'."
+                log_download "   This could be due to:"
+                log_download "   - Invalid or expired token"
+                log_download "   - Repository is private/gated and token lacks access"
+                log_download "   - Repository doesn't exist or was moved"
+                log_download "   - Network connectivity issues"
+                log_download "   ⏭️ Continuing with remaining downloads..."
+                continue
             fi
         else
-            log_download "❌ Failed to download: ${repo_id}"
-            if [ "$has_token" = false ]; then
-                log_download "   HINT: This may be a private repository requiring authentication"
-                log_download "   Consider providing HUGGINGFACE_TOKEN via RunPod secrets"
+            # Silent mode with error capture
+            if ! eval "$download_cmd" &> /dev/null; then
+                log_download "❌ ERROR: Failed to download '${repo_id}'."
+                if [ -z "${HUGGINGFACE_TOKEN:-}" ]; then
+                    log_download "   HINT: This is likely a private/gated repository. Please provide a"
+                    log_download "   HUGGINGFACE_TOKEN via RunPod Secrets ('huggingface.co')."
+                else
+                    log_download "   HINT: Please check if your token is valid and has access to this repository."
+                fi
+                log_download "   ⏭️ Continuing with remaining downloads..."
+                continue
             fi
-            rm -rf "$repo_dir"
+        fi
+        
+        log_download "✅ Completed HF download: ${repo_id}"
+        
+        # Show download size in debug mode
+        if [ "${DEBUG_MODE:-false}" = "true" ]; then
+            local download_size=$(du -sh "${DOWNLOAD_TMP_DIR}/${repo_id}" 2>/dev/null | cut -f1 || echo "unknown")
+            debug_log "Downloaded size: ${download_size}"
         fi
     done
-    
-    log_download "HuggingFace downloads complete: ${success_count}/${total_count} successful"
-    
-    # Clear token from environment
-    unset HUGGING_FACE_HUB_TOKEN 2>/dev/null || true
-    
-    return 0  # Always return success to prevent container exit
 }
 
-# --- Graceful Civitai Downloader ---
+# --- Civitai Downloader (FIXED) ---
 download_civitai_model() {
-    local model_id="$1"
-    local model_type="$2"
-    local has_token="$3"
-    
-    # Validate model ID
-    if [[ ! "$model_id" =~ ^[0-9]+$ ]]; then
-        log_download "⚠️ Invalid Civitai model ID: $model_id (skipping)"
-        return 1
+    local model_id=$1
+    local model_type_for_log=$2
+
+    # Skip if model_id is empty
+    if [ -z "$model_id" ]; then
+        debug_log "Skipping empty model ID"
+        return 0
     fi
-    
-    log_download "Processing Civitai ${model_type} ID: ${model_id}"
-    
-    # Fetch model metadata with graceful error handling
+
+    debug_log "Processing Civitai model ID: ${model_id}"
+
+    # Build API URL with token if available
     local api_url="https://civitai.com/api/v1/models/${model_id}"
-    local model_data=""
-    local fetch_success=false
-    
-    for attempt in {1..3}; do
-        if [ $attempt -gt 1 ]; then
-            log_download "API retry ${attempt}/3 for model ${model_id}"
-            sleep $((attempt * 2))
-        fi
-        
-        if [ "$has_token" = true ]; then
-            model_data=$(timeout 30 curl -s -H "Authorization: Bearer ${CIVITAI_TOKEN}" "$api_url" 2>/dev/null || echo "")
-        else
-            model_data=$(timeout 30 curl -s "$api_url" 2>/dev/null || echo "")
-        fi
-        
-        # Validate JSON response
-        if [ -n "$model_data" ] && echo "$model_data" | jq -e '.modelVersions[0]' >/dev/null 2>&1; then
-            fetch_success=true
-            break
-        fi
-    done
-    
-    if [ "$fetch_success" = false ]; then
-        log_download "❌ Could not fetch metadata for model ${model_id}"
-        if [ "$has_token" = false ]; then
-            log_download "   HINT: This may be a private model requiring authentication"
-        fi
+    local curl_cmd="curl -s"
+    if [ -n "${CIVITAI_TOKEN:-}" ]; then
+        curl_cmd="curl -s -H \"Authorization: Bearer ${CIVITAI_TOKEN}\""
+        debug_log "Using Civitai token for API request"
+    fi
+
+    # Fetch model metadata from Civitai API
+    debug_log "Fetching metadata from: ${api_url}"
+    local model_data
+    model_data=$(eval "${curl_cmd} \"${api_url}\"")
+
+    # Check if API call was successful
+    if [ -z "$model_data" ] || [ "$model_data" = "null" ]; then
+        log_download "❌ ERROR: Could not retrieve metadata for Civitai model ID ${model_id}. API returned empty response."
         return 1
     fi
-    
-    # Parse file information safely
-    local file_info filename download_url remote_hash
-    
-    if ! file_info=$(echo "$model_data" | jq -r '.modelVersions[0].files[0] | {name, downloadUrl, "hash": .hashes.SHA256} | @json' 2>/dev/null); then
-        log_download "❌ Could not parse file data for model ${model_id}"
+
+    # Use jq to parse the latest version's file info with better error handling
+    local file_info
+    file_info=$(echo "${model_data}" | jq -r '.modelVersions[0].files[0] | select(. != null) | {name, downloadUrl, "hash": .hashes.SHA256} | @json' 2>/dev/null)
+
+    if [ -z "$file_info" ] || [ "$file_info" == "null" ]; then
+        log_download "❌ ERROR: Could not parse file information for Civitai model ID ${model_id}."
+        debug_log "API Response preview: $(echo "$model_data" | head -c 200)..."
         return 1
     fi
-    
+
+    local filename download_url remote_hash
     filename=$(echo "$file_info" | jq -r '.name' 2>/dev/null)
     download_url=$(echo "$file_info" | jq -r '.downloadUrl' 2>/dev/null)
-    remote_hash=$(echo "$file_info" | jq -r '.hash' 2>/dev/null)
-    
-    if [ -z "$filename" ] || [ "$filename" = "null" ]; then
-        log_download "❌ Invalid filename for model ${model_id}"
+    remote_hash=$(echo "$file_info" | jq -r '.hash' 2>/dev/null | tr '[:upper:]' '[:lower:]')
+
+    # Validate parsed data
+    if [ -z "$filename" ] || [ "$filename" = "null" ] || [ -z "$download_url" ] || [ "$download_url" = "null" ]; then
+        log_download "❌ ERROR: Invalid file data for Civitai model ID ${model_id}."
+        debug_log "Filename: $filename, Download URL: $download_url"
         return 1
     fi
-    
-    # Check if file already exists
-    if [ -n "${STORAGE_ROOT:-}" ] && find "${STORAGE_ROOT}/models/" -name "$filename" -print -quit 2>/dev/null | grep -q .; then
-        log_download "✅ File already exists: $filename"
+
+    debug_log "Filename: $filename"
+    debug_log "Download URL: ${download_url:0:50}..."
+    debug_log "Remote hash: $remote_hash"
+
+    # --- Idempotency Check ---
+    if find "${STORAGE_ROOT}/models/" -name "${filename}" -print -quit 2>/dev/null | grep -q .; then
+        log_download "ℹ️ Skipping download for '${filename}', file already exists."
         return 0
     fi
+
+    log_download "Starting Civitai download: ${filename} (${model_type_for_log})"
+
+    # Download the file using aria2c with progress display in debug mode
+    local aria2_cmd="aria2c -x 16 -s 16 -k 1M --console-log-level=warn --summary-interval=0 -d \"${DOWNLOAD_TMP_DIR}\" -o \"${filename}\" \"${download_url}\""
     
-    log_download "Downloading: $filename"
-    
-    # Download with graceful error handling
-    local download_success=false
-    local max_attempts=3
-    
-    for attempt in $(seq 1 $max_attempts); do
-        if [ $attempt -gt 1 ]; then
-            log_download "Download retry ${attempt}/${max_attempts} for ${filename}"
-            sleep $((attempt * 5))
-        fi
-        
-        # Check available space before each attempt
-        local available_kb=$(df "${DOWNLOAD_TMP_DIR}" | tail -1 | awk '{print $4}')
-        if [ "$available_kb" -lt 2097152 ]; then  # Less than 2GB
-            log_download "❌ Insufficient disk space for ${filename}"
+    if [ "${DEBUG_MODE:-false}" = "true" ]; then
+        # Show progress in debug mode
+        aria2_cmd="aria2c -x 16 -s 16 -k 1M --console-log-level=info --summary-interval=10 -d \"${DOWNLOAD_TMP_DIR}\" -o \"${filename}\" \"${download_url}\""
+        debug_log "Starting download with progress..."
+    fi
+
+    if ! eval "$aria2_cmd"; then
+        log_download "❌ ERROR: Failed to download ${filename} from Civitai."
+        return 1
+    fi
+
+    # --- Checksum Validation (if hash available) ---
+    if [ -n "$remote_hash" ] && [ "$remote_hash" != "null" ]; then
+        log_download "Verifying checksum for ${filename}..."
+        local local_hash
+        local_hash=$(sha256sum "${DOWNLOAD_TMP_DIR}/${filename}" | awk '{print $1}' | tr '[:upper:]' '[:lower:]')
+
+        if [ "${local_hash}" == "${remote_hash}" ]; then
+            log_download "✅ Checksum PASSED for ${filename}."
+        else
+            log_download "❌ ERROR: Checksum FAILED for ${filename}."
+            log_download "   Expected: ${remote_hash}"
+            log_download "   Got:      ${local_hash}"
+            log_download "   Deleting corrupted file..."
+            rm -f "${DOWNLOAD_TMP_DIR}/${filename}"
             return 1
         fi
-        
-        # Download with aria2c
-        if timeout 1800 aria2c \
-            --max-concurrent-downloads=1 \
-            --max-connection-per-server=8 \
-            --split=8 \
-            --min-split-size=1M \
-            --console-log-level=error \
-            --summary-interval=0 \
-            --max-tries=2 \
-            --retry-wait=10 \
-            --timeout=300 \
-            --dir="${DOWNLOAD_TMP_DIR}" \
-            --out="${filename}" \
-            "${download_url}" >/dev/null 2>&1; then
-            
-            download_success=true
-            break
-        else
-            log_download "Download attempt ${attempt} failed for ${filename}"
-            rm -f "${DOWNLOAD_TMP_DIR}/${filename}"*
-        fi
-    done
-    
-    if [ "$download_success" = true ]; then
-        # Verify hash if available
-        if [ -n "$remote_hash" ] && [ "$remote_hash" != "null" ] && [ ${#remote_hash} -eq 64 ]; then
-            local local_hash=$(sha256sum "${DOWNLOAD_TMP_DIR}/${filename}" 2>/dev/null | awk '{print $1}' | tr '[:upper:]' '[:lower:]')
-            remote_hash=$(echo "$remote_hash" | tr '[:upper:]' '[:lower:]')
-            
-            if [ "$local_hash" = "$remote_hash" ]; then
-                log_download "✅ Downloaded and verified: $filename"
-            else
-                log_download "⚠️ Checksum mismatch for $filename (keeping file anyway)"
-            fi
-        else
-            log_download "✅ Downloaded: $filename (no checksum available)"
-        fi
-        return 0
     else
-        log_download "❌ Failed to download: $filename"
-        return 1
+        debug_log "No checksum available for ${filename}, skipping validation"
     fi
+
+    log_download "✅ Completed Civitai download: ${filename}"
+    return 0
 }
 
 # --- Process Civitai Downloads ---
 process_civitai_downloads() {
-    local download_type="$1"
-    local ids_var="$2"
-    local display_name="$3"
-    
-    log_download "=== CIVITAI ${display_name^^} DOWNLOAD PHASE ==="
-    
-    local ids_string="${!ids_var:-}"
-    if [ -z "$ids_string" ]; then
-        log_download "No Civitai ${display_name} specified. Skipping."
+    local download_list=$1
+    local model_type=$2
+
+    if [ -z "$download_list" ]; then
+        log_download "No Civitai ${model_type}s specified to download."
         return 0
     fi
-    
-    # Check token status
-    local has_token=false
-    if check_token_status "Civitai" "CIVITAI_TOKEN"; then
-        has_token=true
-    fi
-    
-    # Parse and validate IDs
-    ids_string=$(echo "$ids_string" | tr ',' ' ' | tr -s ' ')
-    local -a ids valid_ids
-    read -ra ids <<< "$ids_string"
+
+    log_download "Found Civitai ${model_type}s to download..."
+    debug_log "Processing list: $download_list"
+
+    # Split by comma and process each ID
+    IFS=',' read -ra ids <<< "$download_list"
+    local successful=0
+    local failed=0
     
     for id in "${ids[@]}"; do
+        # Trim whitespace
         id=$(echo "$id" | xargs)
-        if [[ "$id" =~ ^[0-9]+$ ]] && [ ${#id} -le 10 ]; then
-            valid_ids+=("$id")
-        else
-            log_download "⚠️ Invalid ${display_name} ID: $id (skipping)"
+        if [ -n "$id" ]; then
+            if download_civitai_model "$id" "$model_type"; then
+                ((successful++))
+            else
+                ((failed++))
+                log_download "⏭️ Continuing with remaining ${model_type}s..."
+            fi
         fi
     done
-    
-    if [ ${#valid_ids[@]} -eq 0 ]; then
-        log_download "No valid ${display_name} IDs found"
-        return 0
-    fi
-    
-    log_download "Processing ${#valid_ids[@]} ${display_name} IDs..."
-    
-    local success_count=0
-    for id in "${valid_ids[@]}"; do
-        if download_civitai_model "$id" "$display_name" "$has_token"; then
-            success_count=$((success_count + 1))
-        fi
-        
-        # Be respectful to the API
-        sleep 2
-    done
-    
-    log_download "Civitai ${display_name} downloads: ${success_count}/${#valid_ids[@]} successful"
-    return 0
+
+    log_download "Civitai ${model_type}s complete: ${successful} successful, ${failed} failed"
 }
 
-# --- Main Download Orchestration ---
-main() {
-    log_download "Initializing graceful download manager..."
-    
-    # Validate configuration (critical - must succeed)
-    if ! validate_configuration; then
-        log_download "❌ FATAL: Configuration validation failed"
-        exit 1
-    fi
-    
-    local total_errors=0
-    
-    # HuggingFace downloads (non-fatal)
-    if [ -n "${HF_REPOS_TO_DOWNLOAD:-}" ]; then
-        if ! download_hf_repos; then
-            log_download "⚠️ HuggingFace download phase had issues"
-            total_errors=$((total_errors + 1))
-        fi
-    else
-        log_download "No HuggingFace repositories configured"
-    fi
-    
-    # Civitai downloads (non-fatal)
-    if ! process_civitai_downloads "checkpoint" "CIVITAI_CHECKPOINTS_TO_DOWNLOAD" "Checkpoints"; then
-        total_errors=$((total_errors + 1))
-    fi
-    
-    if ! process_civitai_downloads "lora" "CIVITAI_LORAS_TO_DOWNLOAD" "LoRAs"; then
-        total_errors=$((total_errors + 1))
-    fi
-    
-    if ! process_civitai_downloads "vae" "CIVITAI_VAES_TO_DOWNLOAD" "VAEs"; then
-        total_errors=$((total_errors + 1))
-    fi
-    
-    # Summary
-    if [ $total_errors -eq 0 ]; then
-        log_download "✅ All download phases completed successfully"
-    else
-        log_download "⚠️ Download completed with ${total_errors} phase(s) having issues"
-        log_download "   Container will continue - partial downloads are acceptable"
-    fi
-    
-    # Show final status
+# --- Main Orchestration Logic ---
+log_download "Initializing download manager..."
+
+if [ "${DEBUG_MODE:-false}" = "true" ]; then
+    debug_log "Debug mode enabled - showing detailed progress"
+    debug_log "HF_REPOS_TO_DOWNLOAD: ${HF_REPOS_TO_DOWNLOAD:-<empty>}"
+    debug_log "CIVITAI_CHECKPOINTS_TO_DOWNLOAD: ${CIVITAI_CHECKPOINTS_TO_DOWNLOAD:-<empty>}"
+    debug_log "CIVITAI_LORAS_TO_DOWNLOAD: ${CIVITAI_LORAS_TO_DOWNLOAD:-<empty>}"
+    debug_log "CIVITAI_VAES_TO_DOWNLOAD: ${CIVITAI_VAES_TO_DOWNLOAD:-<empty>}"
+fi
+
+# Process Hugging Face downloads
+download_hf_repos
+
+# Process Civitai downloads
+process_civitai_downloads "${CIVITAI_CHECKPOINTS_TO_DOWNLOAD:-}" "Checkpoint"
+process_civitai_downloads "${CIVITAI_LORAS_TO_DOWNLOAD:-}" "LoRA"
+process_civitai_downloads "${CIVITAI_VAES_TO_DOWNLOAD:-}" "VAE"
+
+log_download "All downloads complete."
+
+# Debug summary if enabled
+if [ "${DEBUG_MODE:-false}" = "true" ]; then
+    debug_log "=== DOWNLOAD SUMMARY ==="
     if [ -d "${DOWNLOAD_TMP_DIR}" ]; then
-        local total_files=$(find "${DOWNLOAD_TMP_DIR}" -type f | wc -l)
-        if [ $total_files -gt 0 ]; then
-            local total_size=$(du -sh "${DOWNLOAD_TMP_DIR}" 2>/dev/null | cut -f1 || echo "unknown")
-            log_download "Downloaded: ${total_files} files, ${total_size} total"
-        else
-            log_download "No files were downloaded (this may be normal)"
-        fi
+        debug_log "Downloaded files:"
+        find "${DOWNLOAD_TMP_DIR}" -type f -exec ls -lh {} \; 2>/dev/null | while read -r line; do 
+            debug_log "  $line"
+        done
+        debug_log "Total download size: $(du -sh "${DOWNLOAD_TMP_DIR}" 2>/dev/null | cut -f1 || echo "unknown")"
+    else
+        debug_log "No files downloaded"
     fi
-    
-    log_download "Download manager completed gracefully"
-    return 0  # Always return success
-}
-
-# Execute main function
-main
+    debug_log "=== END SUMMARY ==="
+fi

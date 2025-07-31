@@ -1,194 +1,144 @@
 #!/bin/bash
 # ==================================================================================
-# PHOENIX: FILE ORGANIZER SCRIPT (ENHANCED)
+# PHOENIX: FILE ORGANIZER SCRIPT (FIXED)
 # ==================================================================================
 # This script is sourced by entrypoint.sh. It intelligently moves files from the
 # temporary download directory to their final destinations in the ComfyUI structure.
 
 # --- Global Variables & Setup ---
 readonly MODELS_DIR="${STORAGE_ROOT}/models"
+readonly DOWNLOAD_TMP_DIR="/workspace/downloads_tmp"
 
 # --- Logging Function ---
 log_organizer() {
     echo "  [ORGANIZER] $1"
 }
 
-# --- Model Type Detection Function ---
-detect_model_type() {
-    local file="$1"
-    local filename=$(basename "$file")
-    local filesize=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "0")
-    
-    # Debug output
+# --- Debug Logging Function ---
+debug_log() {
     if [ "${DEBUG_MODE:-false}" = "true" ]; then
-        log_organizer "DEBUG: Analyzing file: $filename (${filesize} bytes)"
+        echo "  [ORGANIZER-DEBUG] $1"
     fi
-    
-    # Convert filename to lowercase for matching
-    local filename_lower="${filename,,}"
-    
-    # FLUX-specific detection (most specific first)
-    case "$filename_lower" in
-        *flux1-dev* | *flux.1-dev* | flux1-dev.safetensors)
-            echo "flux_checkpoints"
-            return
-            ;;
-        ae.safetensors)
-            # FLUX VAE component
-            echo "vae"
-            return
-            ;;
-        model.safetensors)
-            # Could be FLUX transformer - check size
-            if [ "$filesize" -gt 20000000000 ]; then  # > 20GB likely FLUX transformer
-                echo "flux_checkpoints"
-            else
-                echo "checkpoints"
-            fi
-            return
-            ;;
-        *diffusion_pytorch_model*.safetensors)
-            # FLUX UNet components
-            echo "flux_checkpoints"
-            return
-            ;;
-    esac
-    
-    # Size-based heuristics (in bytes)
-    if [ "$filesize" -gt 10000000000 ]; then  # > 10GB
-        if [[ "$filename_lower" == *flux* ]]; then
-            echo "flux_checkpoints"
-        else
-            echo "checkpoints"
-        fi
-        return
-    fi
-    
-    # Pattern-based detection
-    case "$filename_lower" in
-        *lora* | *loha* | *locon*)
-            echo "loras"
-            ;;
-        *vae*)
-            echo "vae"
-            ;;
-        *controlnet* | *t2i-adapter* | *control_net*)
-            echo "controlnet"
-            ;;
-        *upscale* | *esrgan* | *swinir* | *gfpgan* | *realesrgan*)
-            echo "upscale_models"
-            ;;
-        *embedding* | *textual_inversion* | *ti_*)
-            echo "embeddings"
-            ;;
-        *clip*)
-            echo "clip"
-            ;;
-        *unet*)
-            echo "unet"
-            ;;
-        *scheduler*)
-            echo "schedulers"
-            ;;
-        *sdxl* | *sd1.5* | *sd_xl* | *checkpoint* | *ckpt*)
-            echo "checkpoints"
-            ;;
-        *)
-            # Default fallback based on file size
-            if [ "$filesize" -gt 1000000000 ]; then  # > 1GB
-                echo "checkpoints"
-            else
-                echo "loras"  # Smaller files are more likely LoRAs
-            fi
-            ;;
-    esac
 }
 
-# --- Directory Creation Function ---
+# --- Create Model Directory Structure ---
 create_model_directories() {
-    log_organizer "Creating model directory structure..."
+    debug_log "Creating model directory structure..."
     
-    # Standard ComfyUI directories
-    mkdir -p "${MODELS_DIR}/checkpoints"
-    mkdir -p "${MODELS_DIR}/loras"
-    mkdir -p "${MODELS_DIR}/vae"
-    mkdir -p "${MODELS_DIR}/controlnet"
-    mkdir -p "${MODELS_DIR}/upscale_models"
-    mkdir -p "${MODELS_DIR}/embeddings"
-    mkdir -p "${MODELS_DIR}/clip"
-    mkdir -p "${MODELS_DIR}/unet"
-    mkdir -p "${MODELS_DIR}/schedulers"
+    local directories=(
+        "${MODELS_DIR}/checkpoints"
+        "${MODELS_DIR}/loras"
+        "${MODELS_DIR}/vae"
+        "${MODELS_DIR}/controlnet"
+        "${MODELS_DIR}/upscale_models"
+        "${MODELS_DIR}/embeddings"
+        "${MODELS_DIR}/clip"
+        "${MODELS_DIR}/unet"
+        "${MODELS_DIR}/diffusion_models"
+    )
     
-    # FLUX-specific directories
-    mkdir -p "${MODELS_DIR}/flux_checkpoints"
-    
-    if [ "${DEBUG_MODE:-false}" = "true" ]; then
-        log_organizer "DEBUG: Created directory structure under ${MODELS_DIR}"
-    fi
-}
-
-# --- File Processing Function ---
-process_downloaded_files() {
-    local total_files=0
-    local processed_files=0
-    local skipped_files=0
-    
-    # Count total files first
-    if [ -d "${DOWNLOAD_TMP_DIR}" ]; then
-        total_files=$(find "${DOWNLOAD_TMP_DIR}" -type f \( -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" -o -name "*.bin" \) | wc -l)
-        log_organizer "Found ${total_files} model files to process"
-    fi
-    
-    if [ "$total_files" -eq 0 ]; then
-        log_organizer "No model files found to organize"
-        return
-    fi
-    
-    # Process each file
-    find "${DOWNLOAD_TMP_DIR}" -type f \( -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" -o -name "*.bin" \) -print0 | while IFS= read -r -d '' file; do
-        local filename=$(basename "$file")
-        local model_type=$(detect_model_type "$file")
-        local destination_dir="${MODELS_DIR}/${model_type}"
-        
-        # Progress indicator
-        processed_files=$((processed_files + 1))
-        log_organizer "Processing (${processed_files}/${total_files}): ${filename}"
-        
-        # Ensure destination directory exists
-        mkdir -p "${destination_dir}"
-        
-        # Check if file already exists in destination
-        if [ -f "${destination_dir}/${filename}" ]; then
-            log_organizer "ℹ️ File '${filename}' already exists in ${model_type}. Skipping."
-            skipped_files=$((skipped_files + 1))
-            continue
-        fi
-        
-        # Move the file
-        if [ "${DEBUG_MODE:-false}" = "true" ]; then
-            log_organizer "DEBUG: Moving '${filename}' to '${destination_dir}' (detected as: ${model_type})"
+    for dir in "${directories[@]}"; do
+        if mkdir -p "$dir"; then
+            debug_log "Created directory: $dir"
         else
-            log_organizer "Moving '${filename}' to '${model_type}'"
-        fi
-        
-        if mv "$file" "${destination_dir}/"; then
-            log_organizer "✅ Successfully moved ${filename}"
-        else
-            log_organizer "❌ Failed to move ${filename}"
+            log_organizer "⚠️ Warning: Could not create directory: $dir"
         fi
     done
-    
-    log_organizer "File processing complete. Processed: ${processed_files}, Skipped: ${skipped_files}"
 }
 
-# --- Directory Structure Display ---
-show_final_structure() {
-    if [ "${DEBUG_MODE:-false}" = "true" ]; then
-        log_organizer "DEBUG: Final model directory structure:"
-        find "${MODELS_DIR}" -type f -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" -o -name "*.bin" | while read -r file; do
-            local rel_path=${file#${MODELS_DIR}/}
-            log_organizer "  📁 ${rel_path}"
-        done
+# --- Determine Model Category ---
+determine_category() {
+    local filename="$1"
+    local filepath="$2"
+    local filename_lower="${filename,,}"
+    
+    debug_log "Categorizing file: $filename"
+    
+    # Check file path for additional context
+    local filepath_lower="${filepath,,}"
+    
+    # LoRA detection (most specific first)
+    if [[ "$filename_lower" =~ (lora|loha|locon|lycoris) ]] || [[ "$filepath_lower" =~ lora ]]; then
+        echo "loras"
+        return
+    fi
+    
+    # VAE detection
+    if [[ "$filename_lower" =~ vae ]] || [[ "$filepath_lower" =~ vae ]]; then
+        echo "vae"
+        return
+    fi
+    
+    # ControlNet detection
+    if [[ "$filename_lower" =~ (controlnet|t2i.adapter|t2iadapter) ]] || [[ "$filepath_lower" =~ controlnet ]]; then
+        echo "controlnet"
+        return
+    fi
+    
+    # Upscaler detection
+    if [[ "$filename_lower" =~ (upscale|esrgan|swinir|gfpgan|realesrgan|waifu2x) ]] || [[ "$filepath_lower" =~ upscale ]]; then
+        echo "upscale_models"
+        return
+    fi
+    
+    # Embedding detection
+    if [[ "$filename_lower" =~ (embedding|textual.inversion|ti) ]] || [[ "$filepath_lower" =~ (embedding|textual) ]]; then
+        echo "embeddings"
+        return
+    fi
+    
+    # CLIP detection
+    if [[ "$filename_lower" =~ clip ]] || [[ "$filepath_lower" =~ clip ]]; then
+        echo "clip"
+        return
+    fi
+    
+    # UNET detection (for FLUX and newer architectures)
+    if [[ "$filename_lower" =~ unet ]] || [[ "$filepath_lower" =~ unet ]]; then
+        echo "unet"
+        return
+    fi
+    
+    # Diffusion models (broader category)
+    if [[ "$filename_lower" =~ (flux|sd3|sdxl|sd1\.5|sd2\.1|stable.diffusion) ]]; then
+        echo "diffusion_models"
+        return
+    fi
+    
+    # Default to checkpoints for any unrecognized model files
+    echo "checkpoints"
+}
+
+# --- Move File to Destination ---
+move_file_to_destination() {
+    local source_file="$1"
+    local filename="$2"
+    local category="$3"
+    
+    local destination_dir="${MODELS_DIR}/${category}"
+    local destination_file="${destination_dir}/${filename}"
+    
+    # Check if file already exists at destination
+    if [ -f "$destination_file" ]; then
+        log_organizer "ℹ️ Skipping move for '${filename}', file already exists in ${category}/"
+        debug_log "Existing file: $destination_file"
+        return 0
+    fi
+    
+    # Attempt to move the file
+    debug_log "Moving '$filename' from downloads to ${category}/"
+    if mv "$source_file" "$destination_file"; then
+        log_organizer "✅ Moved '${filename}' to ${category}/"
+        
+        # Show file size in debug mode
+        if [ "${DEBUG_MODE:-false}" = "true" ]; then
+            local file_size=$(ls -lh "$destination_file" | awk '{print $5}')
+            debug_log "File size: $file_size"
+        fi
+        return 0
+    else
+        log_organizer "❌ ERROR: Failed to move '${filename}' to ${category}/"
+        return 1
     fi
 }
 
@@ -196,38 +146,121 @@ show_final_structure() {
 organize_files() {
     log_organizer "Starting file organization process..."
     
-    # Validate environment
-    if [ -z "${STORAGE_ROOT:-}" ]; then
-        log_organizer "❌ ERROR: STORAGE_ROOT not set. System setup may have failed."
-        exit 1
-    fi
-    
-    if [ -z "${DOWNLOAD_TMP_DIR:-}" ]; then
-        log_organizer "❌ ERROR: DOWNLOAD_TMP_DIR not set. System setup may have failed."
-        exit 1
-    fi
-    
-    # Check if download directory exists and has content
-    if [ ! -d "${DOWNLOAD_TMP_DIR}" ] || [ -z "$(ls -A "${DOWNLOAD_TMP_DIR}" 2>/dev/null)" ]; then
-        log_organizer "No files found in download directory (${DOWNLOAD_TMP_DIR}). Skipping organization."
-        return
-    fi
-    
-    # Create directory structure
+    # Create the directory structure first
     create_model_directories
     
-    # Process all downloaded files
-    process_downloaded_files
+    # Check if the temporary download directory exists
+    if [ ! -d "${DOWNLOAD_TMP_DIR}" ]; then
+        log_organizer "No download directory found. Nothing to organize."
+        debug_log "Download directory does not exist: ${DOWNLOAD_TMP_DIR}"
+        return 0
+    fi
     
-    # Show final structure in debug mode
-    show_final_structure
+    # Check if directory is empty
+    if [ -z "$(find "${DOWNLOAD_TMP_DIR}" -type f 2>/dev/null)" ]; then
+        log_organizer "No files found in download directory. Nothing to organize."
+        debug_log "Download directory is empty: ${DOWNLOAD_TMP_DIR}"
+        return 0
+    fi
     
-    # Cleanup temp directory
-    log_organizer "Cleaning up temporary download directory..."
-    rm -rf "${DOWNLOAD_TMP_DIR}"
+    # Count total files for progress tracking
+    local total_files
+    total_files=$(find "${DOWNLOAD_TMP_DIR}" -type f \( -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" -o -name "*.bin" \) | wc -l)
     
-    log_organizer "✅ Organization complete."
+    if [ "$total_files" -eq 0 ]; then
+        log_organizer "No model files found to organize."
+        debug_log "No files with extensions: .safetensors, .ckpt, .pt, .pth, .bin"
+        return 0
+    fi
+    
+    log_organizer "Found ${total_files} model files to organize..."
+    
+    # Initialize counters
+    local processed=0
+    local successful=0
+    local failed=0
+    local skipped=0
+    
+    # Process all relevant model files
+    find "${DOWNLOAD_TMP_DIR}" -type f \( -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" -o -name "*.bin" \) -print0 | while IFS= read -r -d '' file; do
+        ((processed++))
+        
+        local filename=$(basename "$file")
+        local category
+        category=$(determine_category "$filename" "$file")
+        
+        debug_log "Processing file $processed/$total_files: $filename -> $category"
+        
+        # Move the file
+        if move_file_to_destination "$file" "$filename" "$category"; then
+            ((successful++))
+        else
+            ((failed++))
+        fi
+        
+        # Show progress in debug mode
+        if [ "${DEBUG_MODE:-false}" = "true" ] && [ $((processed % 5)) -eq 0 ]; then
+            debug_log "Progress: $processed/$total_files files processed"
+        fi
+    done
+    
+    # Get final counts (need to recount since we're in a subshell)
+    local final_successful=0
+    local final_failed=0
+    
+    # Count files that were successfully moved
+    if [ -d "${MODELS_DIR}" ]; then
+        final_successful=$(find "${MODELS_DIR}" -type f \( -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" -o -name "*.bin" \) | wc -l)
+    fi
+    
+    # Count files that remain in download directory
+    if [ -d "${DOWNLOAD_TMP_DIR}" ]; then
+        final_failed=$(find "${DOWNLOAD_TMP_DIR}" -type f \( -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" -o -name "*.bin" \) | wc -l)
+    fi
+    
+    log_organizer "Organization complete: ${final_successful} files organized"
+    
+    if [ "$final_failed" -gt 0 ]; then
+        log_organizer "⚠️ Warning: ${final_failed} files could not be organized"
+    fi
+    
+    # Show summary in debug mode
+    if [ "${DEBUG_MODE:-false}" = "true" ]; then
+        debug_log "=== ORGANIZATION SUMMARY ==="
+        for category in checkpoints loras vae controlnet upscale_models embeddings clip unet diffusion_models; do
+            local count=$(find "${MODELS_DIR}/${category}" -type f 2>/dev/null | wc -l)
+            if [ "$count" -gt 0 ]; then
+                debug_log "  ${category}/: ${count} files"
+            fi
+        done
+        debug_log "=== END SUMMARY ==="
+    fi
 }
 
-# Execute the main function
+# --- Cleanup Function ---
+cleanup_download_directory() {
+    if [ -d "${DOWNLOAD_TMP_DIR}" ]; then
+        # Check if there are any files left
+        local remaining_files
+        remaining_files=$(find "${DOWNLOAD_TMP_DIR}" -type f | wc -l)
+        
+        if [ "$remaining_files" -gt 0 ]; then
+            log_organizer "⚠️ Warning: ${remaining_files} files remain in download directory"
+            if [ "${DEBUG_MODE:-false}" = "true" ]; then
+                debug_log "Remaining files:"
+                find "${DOWNLOAD_TMP_DIR}" -type f | while read -r file; do
+                    debug_log "  $(basename "$file")"
+                done
+            fi
+        fi
+        
+        log_organizer "Cleaning up temporary download directory..."
+        rm -rf "${DOWNLOAD_TMP_DIR}"
+        debug_log "Download directory removed: ${DOWNLOAD_TMP_DIR}"
+    fi
+}
+
+# --- Main Execution ---
 organize_files
+cleanup_download_directory
+log_organizer "✅ File organization complete."

@@ -8,7 +8,7 @@ set -euo pipefail
 
 # ─── Configuration ──────────────────────────────────────────────────────────
 # ⚠️ IMPORTANT: Update this to your Docker Hub username and image name.
-readonly IMAGE_NAME="joyc0025/comfyui-flux-phoenix"
+readonly IMAGE_NAME="joyc0025/comfyui-flux-phoenix:v1.2-test1"
 readonly TEMPLATE_NAME="ComfyUI FLUX - Project Phoenix"
 
 # ─── Pre-flight Checks ──────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ PAYLOAD=$(jq -n \
         "env": [
           { "key": "DEBUG_MODE", "value": "true" },
           { "key": "USE_VOLUME", "value": "false" },
-          { "key": "PARANOID_MODE", "value": "true" },
+          { "key": "PARANOID_MODE", "value": "false" },
           { "key": "COMFY_CUSTOM_NODE_GIT_URLS", "value": "*" },
           { "key": "EXTRA_PYTHON_PACKAGES", "value": "*" },
           { "key": "FB_USERNAME", "value": "admin" },
@@ -104,9 +104,9 @@ PAYLOAD=$(jq -n \
           { "key": "HUGGINGFACE_TOKEN", "value": "{{ RUNPOD_SECRET_huggingface.co }}" },
           { "key": "CIVITAI_TOKEN", "value": "{{ RUNPOD_SECRET_civitai.com }}" },
           { "key": "HF_REPOS_TO_DOWNLOAD", "value": "black-forest-labs/FLUX.1-dev" },
-          { "key": "CIVITAI_CHECKPOINTS_TO_DOWNLOAD", "value": "*" },
-          { "key": "CIVITAI_LORAS_TO_DOWNLOAD", "value": "*" },
-          { "key": "CIVITAI_VAES_TO_DOWNLOAD", "value": "*" }
+          { "key": "CIVITAI_CHECKPOINTS_TO_DOWNLOAD", "value": "1569593,919063,450105" },
+          { "key": "CIVITAI_LORAS_TO_DOWNLOAD", "value": "182404,445135,871108" },
+          { "key": "CIVITAI_VAES_TO_DOWNLOAD", "value": "1674314" }
         ]
       }
     }

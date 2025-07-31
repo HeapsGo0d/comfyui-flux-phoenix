@@ -89,6 +89,49 @@ detect_gpu() {
     fi
 }
 
+# --- Network Connectivity Diagnostics ---
+check_network_connectivity() {
+    log_system "Checking network connectivity..."
+
+    # Test DNS resolution
+    if nslookup huggingface.co >/dev/null 2>&1; then
+        log_system "✅ DNS resolution working (huggingface.co)"
+    else
+        log_system "❌ DNS resolution failed for huggingface.co"
+        log_system "   This explains download failures - DNS is not working"
+    fi
+
+    if nslookup civitai.com >/dev/null 2>&1; then
+        log_system "✅ DNS resolution working (civitai.com)"
+    else
+        log_system "❌ DNS resolution failed for civitai.com"
+    fi
+
+    # Show DNS configuration
+    log_system "Current DNS configuration:"
+    if [ -f "/etc/resolv.conf" ]; then
+        while read -r line; do
+            log_system "   $line"
+        done < /etc/resolv.conf
+    else
+        log_system "   /etc/resolv.conf not found"
+    fi
+
+    # Test basic internet connectivity
+    if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
+        log_system "✅ Basic internet connectivity working (ping 8.8.8.8)"
+    else
+        log_system "❌ No basic internet connectivity"
+    fi
+
+    # Test HTTP to a reliable service
+    if curl -s --connect-timeout 5 --max-time 10 http://httpbin.org/ip >/dev/null 2>&1; then
+        log_system "✅ HTTP connectivity working"
+    else
+        log_system "❌ HTTP connectivity failed"
+    fi
+}
+
 # --- ComfyUI Directory Validation (Non-Fatal) ---
 validate_comfyui() {
     log_system "Validating ComfyUI installation..."
@@ -199,6 +242,8 @@ main_setup() {
     
     # Step 4: GPU detection (non-fatal)
     detect_gpu || setup_errors=$((setup_errors + 1))
+    # Step 4a: Network diagnostics (non-fatal)
+    check_network_connectivity
     
     # Step 5: ComfyUI validation (non-fatal but important)
     if ! validate_comfyui; then

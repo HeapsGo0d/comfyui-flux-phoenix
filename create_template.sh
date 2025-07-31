@@ -94,19 +94,19 @@ PAYLOAD=$(jq -n \
         "ports": $ports,
         "readme": $readme,
         "env": [
-          { "key": "DEBUG_MODE", "value": "false" },
+          { "key": "DEBUG_MODE", "value": "true" },
           { "key": "USE_VOLUME", "value": "false" },
-          { "key": "PARANOID_MODE", "value": "false" },
-          { "key": "COMFY_CUSTOM_NODE_GIT_URLS", "value": "" },
-          { "key": "EXTRA_PYTHON_PACKAGES", "value": "" },
+          { "key": "PARANOID_MODE", "value": "true" },
+          { "key": "COMFY_CUSTOM_NODE_GIT_URLS", "value": "*" },
+          { "key": "EXTRA_PYTHON_PACKAGES", "value": "*" },
           { "key": "FB_USERNAME", "value": "admin" },
           { "key": "FB_PASSWORD", "value": "{{ RUNPOD_SECRET_FILEBROWSER_PASSWORD }}" },
           { "key": "HUGGINGFACE_TOKEN", "value": "{{ RUNPOD_SECRET_huggingface.co }}" },
           { "key": "CIVITAI_TOKEN", "value": "{{ RUNPOD_SECRET_civitai.com }}" },
           { "key": "HF_REPOS_TO_DOWNLOAD", "value": "black-forest-labs/FLUX.1-dev" },
-          { "key": "CIVITAI_CHECKPOINTS_TO_DOWNLOAD", "value": "" },
-          { "key": "CIVITAI_LORAS_TO_DOWNLOAD", "value": "" },
-          { "key": "CIVITAI_VAES_TO_DOWNLOAD", "value": "" }
+          { "key": "CIVITAI_CHECKPOINTS_TO_DOWNLOAD", "value": "*" },
+          { "key": "CIVITAI_LORAS_TO_DOWNLOAD", "value": "*" },
+          { "key": "CIVITAI_VAES_TO_DOWNLOAD", "value": "*" }
         ]
       }
     }

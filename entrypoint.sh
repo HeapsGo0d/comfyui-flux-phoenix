@@ -1,10 +1,9 @@
 #!/bin/bash
 
 # ==================================================================================
-# PHOENIX: NO-FAIL ENTRYPOINT (TESTING MODE)
+# PHOENIX: ENHANCED ENTRYPOINT WITH DIAGNOSTIC INTEGRATION
 # ==================================================================================
-# This version ensures the container stays running even when components fail,
-# allowing for easier debugging and testing.
+# This version includes better error handling and diagnostic capabilities
 
 # --- Basic Safety Setup ---
 set -euo pipefail
@@ -13,134 +12,24 @@ umask 077
 # Disable core dumps
 ulimit -c 0
 
-### DEBUG: integrity_check.sh START
-# Add this function to entrypoint.sh and call it after organizer.
-
-verify_model_organization() {
-    echo "🔍 [INTEGRITY] Starting post-organization integrity check..."
-    
-    # Count files by location
-    local downloads_count=0
-    local models_count=0
-    local total_size_downloads="0"
-    local total_size_models="0"
-    
-    if [ -d "/workspace/downloads_tmp" ]; then
-        downloads_count=$(find /workspace/downloads_tmp -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" | wc -l)
-        total_size_downloads=$(du -sb /workspace/downloads_tmp 2>/dev/null | cut -f1 || echo "0")
-    fi
-    
-    if [ -d "/workspace/models" ]; then
-        models_count=$(find /workspace/models -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" | wc -l)
-        total_size_models=$(du -sb /workspace/models 2>/dev/null | cut -f1 || echo "0")
-    fi
-    
-    echo "🔍 [INTEGRITY] Files remaining in downloads_tmp: ${downloads_count}"
-    echo "🔍 [INTEGRITY] Files organized in /workspace/models: ${models_count}"
-    echo "🔍 [INTEGRITY] Size in downloads_tmp: $(numfmt --to=iec ${total_size_downloads})"
-    echo "🔍 [INTEGRITY] Size in models: $(numfmt --to=iec ${total_size_models})"
-    
-    # Check FileBrowser accessibility
-    if [ -d "/workspace/models" ]; then
-        echo "🔍 [INTEGRITY] FileBrowser will serve files from: /workspace"
-        echo "🔍 [INTEGRITY] Models should be visible at: /workspace/models/"
-        
-        # Test if a sample file is readable
-        local sample_file=$(find /workspace/models -name "*.safetensors" -type f | head -1)
-        if [ -n "$sample_file" ]; then
-            if [ -r "$sample_file" ]; then
-                echo "🔍 [INTEGRITY] ✅ Sample file is readable: $(basename "$sample_file")"
-            else
-                echo "🔍 [INTEGRITY] ❌ Sample file is NOT readable: $(basename "$sample_file")"
-                ls -la "$sample_file"
-            fi
-        fi
-    fi
-    
-    # Summary
-    if [ "$models_count" -gt 0 ]; then
-        echo "🔍 [INTEGRITY] ✅ SUCCESS: ${models_count} model files organized successfully"
-    else
-        echo "🔍 [INTEGRITY] ❌ WARNING: No model files found in final location"
-        echo "🔍 [INTEGRITY] This suggests an issue with the organization process"
-    fi
-    
-    # Show directory structure for debugging
-    if [ "${DEBUG_MODE:-false}" = "true" ]; then
-        echo "🔍 [INTEGRITY] Final directory structure:"
-        find /workspace/models -type f 2>/dev/null | head -10 | while read -r file; do
-            echo "🔍 [INTEGRITY]   $(ls -la "$file")"
-        done
-    fi
-}
-
-# Add this call to your main() function after the organizer step:
-# verify_model_organization
-### DEBUG: integrity_check.sh END
-
-### DEBUG: file_monitor_script.sh START
-# Add this function to entrypoint.sh
-
-monitor_file_system() {
-    if [ "${DEBUG_MODE:-false}" = "true" ]; then
-        echo "🔍 [FILE-MONITOR] Starting file system monitoring..."
-        
-        # Create a background monitor that runs during organization
-        (
-            while true; do
-                sleep 5
-                echo "🔍 [FILE-MONITOR] $(date '+%H:%M:%S') - .safetensors count:"
-                echo "🔍 [FILE-MONITOR]   /workspace/downloads_tmp: $(find /workspace/downloads_tmp -name "*.safetensors" 2>/dev/null | wc -l) files"
-                echo "🔍 [FILE-MONITOR]   /workspace/models: $(find /workspace/models -name "*.safetensors" 2>/dev/null | wc -l) files"
-                
-                # Check if organizer is still running
-                if ! pgrep -f "organizer.sh" > /dev/null; then
-                    echo "🔍 [FILE-MONITOR] Organizer finished, stopping monitor"
-                    break
-                fi
-            done
-        ) &
-        
-        # Store the PID so we can kill it later
-        echo $! > /tmp/file_monitor.pid
-    fi
-}
-
-# Add this to your main() function before step 3:
-main() {
-    echo "🚀 Phoenix Entrypoint: Initializing container..."
-    
-    # ... existing steps 1 & 2 ...
-    
-    # Start file monitoring before organizer
-    monitor_file_system
-    
-    echo "  -> 3/4: Running File Organizer..."
-    source "${SCRIPT_DIR}/organizer.sh"
-    
-    # Kill the monitor after organizer completes
-    if [ -f "/tmp/file_monitor.pid" ]; then
-        kill $(cat /tmp/file_monitor.pid) 2>/dev/null || true
-        rm -f /tmp/file_monitor.pid
-    fi
-    
-    # ... rest of main function
-}
-### DEBUG: file_monitor_script.sh END
-
-# --- Cleanup Function (Non-Destructive in Testing Mode) ---
+# --- Enhanced Cleanup Function ---
 cleanup() {
     echo "🚨 Phoenix Entrypoint: Received exit signal..."
     
-    # In testing mode, we do minimal cleanup to preserve debugging info
+    # Show brief system state before cleanup
+    if [ "${DEBUG_MODE:-false}" = "true" ]; then
+        echo "  Final system state:"
+        echo "    Models organized: $(find "${STORAGE_ROOT:-/workspace}/models" -name "*.safetensors" -o -name "*.ckpt" 2>/dev/null | wc -l) files"
+        echo "    Downloads remaining: $(find "/workspace/downloads_tmp" -name "*.safetensors" -o -name "*.ckpt" 2>/dev/null | wc -l) files"
+    fi
+    
     if [ "${PARANOID_MODE:-false}" = "true" ]; then
         echo "  PARANOID_MODE enabled - performing full cleanup"
         if [ -x "/usr/local/bin/scripts/forensic_cleanup.sh" ]; then
             /usr/local/bin/scripts/forensic_cleanup.sh
         fi
     else
-        echo "  Testing mode - preserving data for debugging"
-        # Only clean temporary sensitive data, keep everything else
+        echo "  Standard cleanup - preserving data for debugging"
         rm -rf /tmp/* 2>/dev/null || true
         unset HUGGINGFACE_TOKEN CIVITAI_TOKEN 2>/dev/null || true
     fi
@@ -152,11 +41,12 @@ cleanup() {
 # Trap signals for graceful shutdown
 trap cleanup SIGINT SIGTERM EXIT
 
-# --- Component Runner (Failure-Tolerant) ---
+# --- Enhanced Component Runner ---
 run_component() {
     local component_name="$1"
     local script_path="$2"
     local required="${3:-false}"
+    local timeout="${4:-300}"  # 5 minute default timeout
     
     echo "  -> Running ${component_name}..."
     
@@ -176,11 +66,20 @@ run_component() {
         chmod +x "$script_path" || true
     fi
     
-    # Run the script and capture its exit code
+    # Run with timeout to prevent hanging
     local exit_code=0
-    if ! source "$script_path"; then
+    echo "     Starting ${component_name} (timeout: ${timeout}s)..."
+    
+    if timeout "$timeout" bash -c "source '$script_path'"; then
+        echo "     ✅ ${component_name} completed successfully"
+        return 0
+    else
         exit_code=$?
-        echo "     ❌ ${component_name} failed with exit code: $exit_code"
+        if [ $exit_code -eq 124 ]; then
+            echo "     ❌ ${component_name} timed out after ${timeout}s"
+        else
+            echo "     ❌ ${component_name} failed with exit code: $exit_code"
+        fi
         
         if [ "$required" = "true" ]; then
             echo "     This is a required component - cannot continue"
@@ -189,13 +88,10 @@ run_component() {
             echo "     This is optional - continuing despite failure"
             return 0
         fi
-    else
-        echo "     ✅ ${component_name} completed successfully"
-        return 0
     fi
 }
 
-# --- Service Health Check ---
+# --- Enhanced Service Health Check ---
 check_service_health() {
     local service_name="$1"
     local port="$2"
@@ -204,7 +100,7 @@ check_service_health() {
     echo "  Checking ${service_name} health on port ${port}..."
     
     for attempt in $(seq 1 $max_attempts); do
-        if curl -s -f "http://127.0.0.1:${port}" >/dev/null 2>&1; then
+        if curl -s --connect-timeout 5 --max-time 10 -f "http://127.0.0.1:${port}" >/dev/null 2>&1; then
             echo "  ✅ ${service_name} is responding on port ${port}"
             return 0
         fi
@@ -214,11 +110,16 @@ check_service_health() {
             return 1
         fi
         
+        # Show progress for long waits
+        if [ $attempt -eq 10 ] || [ $attempt -eq 20 ]; then
+            echo "    Still waiting for ${service_name}... (attempt $attempt/$max_attempts)"
+        fi
+        
         sleep 2
     done
 }
 
-# --- Network Health Check ---
+# --- Enhanced Network Check ---
 check_network() {
     local max_attempts=10
     local attempt=1
@@ -229,23 +130,21 @@ check_network() {
     while [ $attempt -le $max_attempts ]; do
         echo "  -> Attempt $attempt/$max_attempts: Testing connectivity..."
         
-        # Test multiple methods for more reliable detection
         local dns_test=false
         local http_test=false
         
-        # Method 1: DNS resolution test (multiple servers)
-        if nslookup google.com 8.8.8.8 >/dev/null 2>&1 || \
-           nslookup cloudflare.com 1.1.1.1 >/dev/null 2>&1; then
+        # Test DNS resolution (multiple servers)
+        if timeout 10 nslookup google.com 8.8.8.8 >/dev/null 2>&1 || \
+           timeout 10 nslookup cloudflare.com 1.1.1.1 >/dev/null 2>&1; then
             dns_test=true
         fi
         
-        # Method 2: HTTP connectivity test (with timeout)
-        if timeout 5 curl -s --max-time 5 https://www.google.com >/dev/null 2>&1 || \
-           timeout 5 curl -s --max-time 5 https://httpbin.org/ip >/dev/null 2>&1; then
+        # Test HTTP connectivity with timeout
+        if timeout 10 curl -s --max-time 5 https://www.google.com >/dev/null 2>&1 || \
+           timeout 10 curl -s --max-time 5 https://httpbin.org/ip >/dev/null 2>&1; then
             http_test=true
         fi
         
-        # Success if either method works
         if [ "$dns_test" = true ] || [ "$http_test" = true ]; then
             echo "✅ Network connectivity confirmed (DNS: $dns_test, HTTP: $http_test)"
             return 0
@@ -254,7 +153,7 @@ check_network() {
         echo "❌ Network not ready (DNS: $dns_test, HTTP: $http_test)"
         
         if [ $attempt -eq $max_attempts ]; then
-            echo "⚠️  Network wait exhausted after $max_attempts attempts"
+            echo "⚠️ Network wait exhausted after $max_attempts attempts"
             echo "   Proceeding anyway - downloads may work due to retry logic"
             return 1
         fi
@@ -268,51 +167,168 @@ check_network() {
     done
 }
 
+# --- Post-Organization Verification ---
+verify_organization_results() {
+    echo "🔍 Verifying file organization results..."
+    
+    # Use the enhanced integrity check
+    if [ -f "/usr/local/bin/scripts/enhanced_integrity_check.sh" ]; then
+        chmod +x /usr/local/bin/scripts/enhanced_integrity_check.sh
+        /usr/local/bin/scripts/enhanced_integrity_check.sh
+        return $?
+    else
+        # Fallback basic check
+        local models_count=0
+        local downloads_count=0
+        
+        if [ -d "${STORAGE_ROOT:-/workspace}/models" ]; then
+            models_count=$(find "${STORAGE_ROOT:-/workspace}/models" -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" | wc -l)
+        fi
+        
+        if [ -d "/workspace/downloads_tmp" ]; then
+            downloads_count=$(find "/workspace/downloads_tmp" -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" | wc -l)
+        fi
+        
+        echo "🔍 Basic verification: $models_count models organized, $downloads_count remain in downloads"
+        
+        if [ "$models_count" -gt 0 ]; then
+            echo "✅ Organization appears successful"
+            return 0
+        elif [ "$downloads_count" -gt 0 ]; then
+            echo "⚠️ Files exist but weren't organized properly"
+            return 1
+        else
+            echo "❌ No model files found anywhere"
+            return 1
+        fi
+    fi
+}
+
+# --- Emergency Recovery Mode ---
+emergency_recovery() {
+    echo "🚑 EMERGENCY RECOVERY: Attempting to salvage stranded files..."
+    
+    local downloads_tmp="/workspace/downloads_tmp"
+    local models_dir="${STORAGE_ROOT:-/workspace}/models"
+    
+    if [ -d "$downloads_tmp" ]; then
+        local stranded_files
+        stranded_files=$(find "$downloads_tmp" -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" | wc -l)
+        
+        if [ "$stranded_files" -gt 0 ]; then
+            echo "🚑 Found $stranded_files stranded files - attempting emergency move..."
+            
+            # Create emergency checkpoint directory
+            mkdir -p "$models_dir/checkpoints" 2>/dev/null || true
+            
+            # Simple move operation
+            local recovered=0
+            find "$downloads_tmp" -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" | while read -r file; do
+                local filename=$(basename "$file")
+                if mv "$file" "$models_dir/checkpoints/$filename" 2>/dev/null; then
+                    echo "🚑 Recovered: $filename"
+                    ((recovered++))
+                fi
+            done
+            
+            echo "🚑 Emergency recovery completed - check models/checkpoints/ directory"
+            return 0
+        fi
+    fi
+    
+    echo "🚑 No files found for emergency recovery"
+    return 1
+}
+
 # --- Main Orchestration ---
 main() {
-    echo "🚀 Phoenix Entrypoint: Starting in NO-FAIL testing mode..."
-    echo "   Container will continue running even if some components fail"
-    echo "   Set PARANOID_MODE=true for full cleanup on exit"
+    echo "🚀 Phoenix Entrypoint: Starting enhanced container initialization..."
+    echo "   Version: Enhanced with diagnostics and atomic operations"
+    echo "   Mode: Production with fallback recovery"
     
     # Define script paths
     local SCRIPT_DIR="/usr/local/bin/scripts"
     local total_errors=0
+    local critical_failure=false
     
     echo ""
     echo "=== PHOENIX STARTUP SEQUENCE ==="
     
     # Step 1: System Setup (REQUIRED - must succeed)
-    if ! run_component "System Setup" "${SCRIPT_DIR}/system_setup.sh" "true"; then
+    echo ""
+    echo "📋 Step 1: System Setup"
+    if ! run_component "System Setup" "${SCRIPT_DIR}/system_setup.sh" "true" 60; then
         echo "❌ FATAL: System setup failed - cannot continue"
+        
+        # Run diagnostics before exit
+        if [ -f "${SCRIPT_DIR}/diagnosis.sh" ]; then
+            echo "🔍 Running diagnostics before exit..."
+            chmod +x "${SCRIPT_DIR}/diagnosis.sh"
+            "${SCRIPT_DIR}/diagnosis.sh"
+        fi
+        
         exit 1
     fi
     
-    # Step 1.5: Network Check
+    # Step 2: Network Check
+    echo ""
+    echo "🌐 Step 2: Network Connectivity"
     if ! check_network; then
-        echo "⚠️ Network check failed, but continuing in NO-FAIL mode."
-        # In a production entrypoint, you would likely 'exit 1' here.
+        echo "⚠️ Network issues detected - downloads may fail"
+        total_errors=$((total_errors + 1))
     fi
 
-    # Step 2: Download Manager (OPTIONAL - failures are acceptable)
-    if ! run_component "Download Manager" "${SCRIPT_DIR}/download_manager.sh" "false"; then
+    # Step 3: Download Manager
+    echo ""
+    echo "📥 Step 3: Download Manager"
+    if ! run_component "Download Manager" "${SCRIPT_DIR}/download_manager.sh" "false" 1800; then  # 30 min timeout
         echo "⚠️ Download manager had issues - continuing anyway"
         total_errors=$((total_errors + 1))
     fi
     
-    # Step 3: File Organizer (OPTIONAL - only runs if downloads exist)
-    if [ -d "${DOWNLOAD_TMP_DIR:-/workspace/downloads_tmp}" ] && [ "$(ls -A "${DOWNLOAD_TMP_DIR:-/workspace/downloads_tmp}" 2>/dev/null)" ]; then
-        if ! run_component "File Organizer" "${SCRIPT_DIR}/organizer.sh" "false"; then
-            echo "⚠️ File organizer had issues - continuing anyway"
+    # Step 4: File Organization (Critical for functionality)
+    echo ""
+    echo "📂 Step 4: File Organization"
+    local organization_success=true
+    
+    if [ -d "/workspace/downloads_tmp" ] && [ "$(find /workspace/downloads_tmp -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" | wc -l)" -gt 0 ]; then
+        echo "  Files detected in downloads_tmp - proceeding with organization..."
+        
+        if ! run_component "File Organizer" "${SCRIPT_DIR}/organizer.sh" "false" 600; then  # 10 min timeout
+            echo "⚠️ File organizer failed - will attempt verification and recovery"
+            organization_success=false
             total_errors=$((total_errors + 1))
         fi
-        verify_model_organization
-        monitor_file_system &
+        
+        # Always verify organization results
+        echo ""
+        echo "🔍 Step 4.1: Organization Verification"
+        if ! verify_organization_results; then
+            echo "⚠️ Organization verification failed"
+            organization_success=false
+            
+            # Attempt emergency recovery
+            echo ""
+            echo "🚑 Step 4.2: Emergency Recovery"
+            if emergency_recovery; then
+                echo "✅ Emergency recovery succeeded - some models may be available"
+                organization_success=true  # Partial success
+            else
+                echo "❌ Emergency recovery failed - no models available"
+                critical_failure=true
+            fi
+        else
+            echo "✅ Organization verification passed"
+        fi
+        
     else
-        echo "  -> File Organizer: Skipped (no downloads to organize)"
+        echo "  No files found in downloads_tmp - skipping organization"
     fi
     
-    # Step 4: Service Manager (SEMI-REQUIRED - container is less useful without it)
-    if ! run_component "Service Manager" "${SCRIPT_DIR}/service_manager.sh" "false"; then
+    # Step 5: Service Manager
+    echo ""
+    echo "🚀 Step 5: Service Manager"
+    if ! run_component "Service Manager" "${SCRIPT_DIR}/service_manager.sh" "false" 120; then
         echo "⚠️ Service manager had issues - some services may not be available"
         total_errors=$((total_errors + 1))
     fi
@@ -320,86 +336,27 @@ main() {
     echo ""
     echo "=== STARTUP COMPLETE ==="
     
-    if [ $total_errors -eq 0 ]; then
+    # Startup Summary
+    if [ "$critical_failure" = "true" ]; then
+        echo "❌ CRITICAL FAILURE: Container started but no models are available"
+        echo "   ComfyUI will not be functional for inference"
+        echo "   Check logs and consider restarting with DEBUG_MODE=true"
+    elif [ $total_errors -eq 0 ]; then
         echo "✅ All components started successfully!"
+        echo "   Container is fully functional"
     else
         echo "⚠️ Startup completed with ${total_errors} component(s) having issues"
         echo "   Container is running but some features may be limited"
+        if [ "$organization_success" = "true" ]; then
+            echo "   Models are available - basic functionality should work"
+        fi
     fi
     
     echo ""
     echo "📊 Service Status Check..."
     
-    # Wait a moment for services to start
+    # Wait for services to stabilize
     sleep 5
     
     # Check service health
     local service_issues=0
-    
-    if ! check_service_health "ComfyUI" "8188" 15; then
-        service_issues=$((service_issues + 1))
-        echo "  ℹ️ ComfyUI may still be starting up - check logs for details"
-    fi
-    
-    if ! check_service_health "FileBrowser" "8080" 10; then
-        service_issues=$((service_issues + 1))
-        echo "  ℹ️ FileBrowser may not be running - check configuration"
-    fi
-    
-    echo ""
-    echo "🎯 Container Status Summary:"
-    echo "   📍 Storage Root: ${STORAGE_ROOT:-/workspace}"
-    echo "   🔧 Debug Mode: ${DEBUG_MODE:-false}"
-    echo "   🛡️ Paranoid Mode: ${PARANOID_MODE:-false}"
-    echo "   🎮 GPU Available: ${GPU_AVAILABLE:-unknown}"
-    
-    if [ -n "${GPU_NAME:-}" ] && [ "${GPU_NAME}" != "CPU_MODE" ]; then
-        echo "   🖥️ GPU: ${GPU_NAME} (${GPU_MEMORY:-0}MiB VRAM)"
-    fi
-    
-    echo ""
-    if [ $service_issues -eq 0 ]; then
-        echo "🚀 All services appear to be running!"
-        echo "   • ComfyUI: http://localhost:8188"
-        echo "   • FileBrowser: http://localhost:8080"
-    else
-        echo "⚠️ Some services may have issues - check individual service logs"
-    fi
-    
-    echo ""
-    echo "📝 Troubleshooting Tips:"
-    echo "   • Set DEBUG_MODE=true for verbose logging"
-    echo "   • Check /workspace/models/ for downloaded files"
-    echo "   • Ensure tokens are properly configured for private models"
-    echo "   • Use FileBrowser to inspect directory contents"
-    
-    echo ""
-    echo "🔄 Container will now wait indefinitely..."
-    echo "   Use Ctrl+C or docker stop to gracefully shutdown"
-    
-    # Enhanced wait loop with periodic status updates
-    local wait_minutes=0
-    while true; do
-        sleep 300  # 5 minutes
-        wait_minutes=$((wait_minutes + 5))
-        
-        if [ "${DEBUG_MODE:-false}" = "true" ]; then
-            echo "⏰ Container running for ${wait_minutes} minutes..."
-            
-            # Periodic health checks in debug mode
-            if [ $((wait_minutes % 15)) -eq 0 ]; then
-                echo "🏥 Periodic health check..."
-                check_service_health "ComfyUI" "8188" 3 || echo "  ComfyUI may need attention"
-                check_service_health "FileBrowser" "8080" 3 || echo "  FileBrowser may need attention"
-            fi
-        fi
-        
-        # Optional: periodic cleanup of temp files (but preserve debugging info)
-        if [ $((wait_minutes % 60)) -eq 0 ]; then  # Every hour
-            find /tmp -name "*.tmp" -mmin +30 -delete 2>/dev/null || true
-        fi
-    done
-}
-
-# Execute the main function
-main

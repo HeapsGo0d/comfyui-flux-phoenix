@@ -360,3 +360,29 @@ main() {
     
     # Check service health
     local service_issues=0
+    if ! check_service_health "ComfyUI"; then
+        service_issues=1
+    fi
+    if ! check_service_health "FileBrowser"; then
+        service_issues=1
+    fi
+
+    if [ "$service_issues" -ne 0 ]; then
+        log "FATAL: One or more services failed to start. Entering emergency mode."
+        emergency_mode "Service startup failure"
+        # Emergency mode is an infinite loop, so we shouldn't get here.
+        # But as a fallback, exit.
+        exit 1
+    fi
+
+    log "All services are operational. System is fully initialized."
+    log "-------------------------------------------------------------------"
+    log "Phoenix is running. Access services at their respective ports."
+    log "-------------------------------------------------------------------"
+
+    # Keep the container running by waiting on the service manager
+    wait_for_service_manager
+}
+
+# Execute the main function with all script arguments
+main "$@"

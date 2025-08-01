@@ -100,6 +100,36 @@ launch_file_browser() {
     log_service "Waiting for file system to settle..."
     sleep 3
 
+    ### DEBUG: filebrowser_debug.sh START
+    debug_filebrowser_setup() {
+        if [ "${DEBUG_MODE:-false}" = "true" ]; then
+            echo "  [SERVICE-DEBUG] === FILEBROWSER SETUP DEBUG ==="
+            echo "  [SERVICE-DEBUG] FileBrowser root will be: /workspace"
+            echo "  [SERVICE-DEBUG] /workspace contents:"
+            ls -la /workspace/ | while read -r line; do
+                echo "  [SERVICE-DEBUG]   $line"
+            done
+            
+            echo "  [SERVICE-DEBUG] /workspace/models contents:"
+            if [ -d "/workspace/models" ]; then
+                find /workspace/models -type f | head -20 | while read -r file; do
+                    echo "  [SERVICE-DEBUG]   $(ls -la "$file")"
+                done
+            else
+                echo "  [SERVICE-DEBUG]   /workspace/models does not exist!"
+            fi
+            
+            echo "  [SERVICE-DEBUG] Current user: $(whoami)"
+            echo "  [SERVICE-DEBUG] Current groups: $(groups)"
+            echo "  [SERVICE-DEBUG] umask: $(umask)"
+            echo "  [SERVICE-DEBUG] === END FILEBROWSER DEBUG ==="
+        fi
+    }
+
+    # Call debug function before launch
+    debug_filebrowser_setup
+    ### DEBUG: filebrowser_debug.sh END
+
     # Launch File Browser with optimized settings
     log_service "Launching File Browser on port 8080..."
     filebrowser --database "$db_path" \

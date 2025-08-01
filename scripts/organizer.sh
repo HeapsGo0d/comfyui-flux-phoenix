@@ -264,3 +264,123 @@ cleanup_download_directory() {
 organize_files
 cleanup_download_directory
 log_organizer "✅ File organization complete."
+
+### DEBUG: debug_organizer.sh START
+# Add these debug functions to organizer.sh
+
+# --- Enhanced Debug Functions ---
+debug_file_system() {
+    if [ "${DEBUG_MODE:-false}" = "true" ]; then
+        echo "  [ORGANIZER-DEBUG] === FILE SYSTEM STATE ==="
+        echo "  [ORGANIZER-DEBUG] STORAGE_ROOT: ${STORAGE_ROOT}"
+        echo "  [ORGANIZER-DEBUG] PWD: $(pwd)"
+        echo "  [ORGANIZER-DEBUG] Downloads tmp exists: $([ -d "${DOWNLOAD_TMP_DIR}" ] && echo "YES" || echo "NO")"
+        echo "  [ORGANIZER-DEBUG] Models dir exists: $([ -d "${MODELS_DIR}" ] && echo "YES" || echo "NO")"
+        
+        # Show all .safetensors files in the system
+        echo "  [ORGANIZER-DEBUG] All .safetensors files in /workspace:"
+        find /workspace -name "*.safetensors" -type f 2>/dev/null | while read -r file; do
+            echo "  [ORGANIZER-DEBUG]   $(ls -la "$file" 2>/dev/null || echo "ERROR reading $file")"
+        done
+        
+        # Show directory structure
+        echo "  [ORGANIZER-DEBUG] /workspace structure:"
+        ls -la /workspace/ 2>/dev/null | while read -r line; do
+            echo "  [ORGANIZER-DEBUG]   $line"
+        done
+        
+        if [ -d "${MODELS_DIR}" ]; then
+            echo "  [ORGANIZER-DEBUG] Models directory structure:"
+            find "${MODELS_DIR}" -type f 2>/dev/null | head -20 | while read -r file; do
+                echo "  [ORGANIZER-DEBUG]   $(ls -la "$file")"
+            done
+        fi
+        echo "  [ORGANIZER-DEBUG] === END FILE SYSTEM STATE ==="
+    fi
+}
+
+# --- Enhanced Move Function with Tracing ---
+move_file_to_destination() {
+    local source_file="$1"
+    local filename="$2"
+    local category="$3"
+    
+    local destination_dir="${MODELS_DIR}/${category}"
+    local destination_file="${destination_dir}/${filename}"
+    
+    debug_log "=== MOVE OPERATION START ==="
+    debug_log "Source: $source_file"
+    debug_log "Destination dir: $destination_dir"
+    debug_log "Destination file: $destination_file"
+    debug_log "Source exists: $([ -f "$source_file" ] && echo "YES" || echo "NO")"
+    debug_log "Source size: $([ -f "$source_file" ] && ls -lh "$source_file" | awk '{print $5}' || echo "N/A")"
+    debug_log "Destination dir exists: $([ -d "$destination_dir" ] && echo "YES" || echo "NO")"
+    
+    # Create destination directory with verbose logging
+    if ! mkdir -p "$destination_dir"; then
+        log_organizer "❌ ERROR: Failed to create directory: $destination_dir"
+        debug_log "mkdir failed for: $destination_dir"
+        return 1
+    fi
+    debug_log "Directory created/verified: $destination_dir"
+    
+    # Check if file already exists at destination
+    if [ -f "$destination_file" ]; then
+        log_organizer "ℹ️ Skipping move for '${filename}', file already exists in ${category}/"
+        debug_log "File already exists: $destination_file"
+        debug_log "Existing file size: $(ls -lh "$destination_file" | awk '{print $5}')"
+        return 0
+    fi
+    
+    # Attempt to move the file with detailed logging
+    debug_log "Attempting move operation..."
+    
+    # Use set -x for this specific operation in debug mode
+    if [ "${DEBUG_MODE:-false}" = "true" ]; then
+        set -x
+    fi
+    
+    if mv "$source_file" "$destination_file"; then
+        if [ "${DEBUG_MODE:-false}" = "true" ]; then
+            set +x
+        fi
+        
+        log_organizer "✅ Moved '${filename}' to ${category}/"
+        debug_log "Move successful!"
+        debug_log "Final file exists: $([ -f "$destination_file" ] && echo "YES" || echo "NO")"
+        debug_log "Final file size: $([ -f "$destination_file" ] && ls -lh "$destination_file" | awk '{print $5}' || echo "N/A")"
+        debug_log "Final file permissions: $([ -f "$destination_file" ] && ls -la "$destination_file" | awk '{print $1,$3,$4}' || echo "N/A")"
+        
+        # Verify file is actually readable
+        if [ -f "$destination_file" ] && [ -r "$destination_file" ]; then
+            debug_log "✅ File is readable after move"
+        else
+            debug_log "❌ File is NOT readable after move!"
+        fi
+        
+        debug_log "=== MOVE OPERATION SUCCESS ==="
+        return 0
+    else
+        if [ "${DEBUG_MODE:-false}" = "true" ]; then
+            set +x
+        fi
+        
+        log_organizer "❌ ERROR: Failed to move '${filename}' to ${category}/"
+        debug_log "Move operation failed!"
+        debug_log "Source still exists: $([ -f "$source_file" ] && echo "YES" || echo "NO")"
+        debug_log "Destination exists: $([ -f "$destination_file" ] && echo "YES" || echo "NO")"
+        debug_log "=== MOVE OPERATION FAILED ==="
+        return 1
+    fi
+}
+
+# Add this at the start of organize_files()
+organize_files() {
+    log_organizer "Starting file organization process..."
+    
+    # Debug file system state before starting
+    debug_file_system
+    
+    # ... rest of your existing organize_files function
+}
+### DEBUG: debug_organizer.sh END

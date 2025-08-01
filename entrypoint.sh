@@ -13,6 +13,121 @@ umask 077
 # Disable core dumps
 ulimit -c 0
 
+### DEBUG: integrity_check.sh START
+# Add this function to entrypoint.sh and call it after organizer.
+
+verify_model_organization() {
+    echo "🔍 [INTEGRITY] Starting post-organization integrity check..."
+    
+    # Count files by location
+    local downloads_count=0
+    local models_count=0
+    local total_size_downloads="0"
+    local total_size_models="0"
+    
+    if [ -d "/workspace/downloads_tmp" ]; then
+        downloads_count=$(find /workspace/downloads_tmp -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" | wc -l)
+        total_size_downloads=$(du -sb /workspace/downloads_tmp 2>/dev/null | cut -f1 || echo "0")
+    fi
+    
+    if [ -d "/workspace/models" ]; then
+        models_count=$(find /workspace/models -name "*.safetensors" -o -name "*.ckpt" -o -name "*.pt" -o -name "*.pth" | wc -l)
+        total_size_models=$(du -sb /workspace/models 2>/dev/null | cut -f1 || echo "0")
+    fi
+    
+    echo "🔍 [INTEGRITY] Files remaining in downloads_tmp: ${downloads_count}"
+    echo "🔍 [INTEGRITY] Files organized in /workspace/models: ${models_count}"
+    echo "🔍 [INTEGRITY] Size in downloads_tmp: $(numfmt --to=iec ${total_size_downloads})"
+    echo "🔍 [INTEGRITY] Size in models: $(numfmt --to=iec ${total_size_models})"
+    
+    # Check FileBrowser accessibility
+    if [ -d "/workspace/models" ]; then
+        echo "🔍 [INTEGRITY] FileBrowser will serve files from: /workspace"
+        echo "🔍 [INTEGRITY] Models should be visible at: /workspace/models/"
+        
+        # Test if a sample file is readable
+        local sample_file=$(find /workspace/models -name "*.safetensors" -type f | head -1)
+        if [ -n "$sample_file" ]; then
+            if [ -r "$sample_file" ]; then
+                echo "🔍 [INTEGRITY] ✅ Sample file is readable: $(basename "$sample_file")"
+            else
+                echo "🔍 [INTEGRITY] ❌ Sample file is NOT readable: $(basename "$sample_file")"
+                ls -la "$sample_file"
+            fi
+        fi
+    fi
+    
+    # Summary
+    if [ "$models_count" -gt 0 ]; then
+        echo "🔍 [INTEGRITY] ✅ SUCCESS: ${models_count} model files organized successfully"
+    else
+        echo "🔍 [INTEGRITY] ❌ WARNING: No model files found in final location"
+        echo "🔍 [INTEGRITY] This suggests an issue with the organization process"
+    fi
+    
+    # Show directory structure for debugging
+    if [ "${DEBUG_MODE:-false}" = "true" ]; then
+        echo "🔍 [INTEGRITY] Final directory structure:"
+        find /workspace/models -type f 2>/dev/null | head -10 | while read -r file; do
+            echo "🔍 [INTEGRITY]   $(ls -la "$file")"
+        done
+    fi
+}
+
+# Add this call to your main() function after the organizer step:
+# verify_model_organization
+### DEBUG: integrity_check.sh END
+
+### DEBUG: file_monitor_script.sh START
+# Add this function to entrypoint.sh
+
+monitor_file_system() {
+    if [ "${DEBUG_MODE:-false}" = "true" ]; then
+        echo "🔍 [FILE-MONITOR] Starting file system monitoring..."
+        
+        # Create a background monitor that runs during organization
+        (
+            while true; do
+                sleep 5
+                echo "🔍 [FILE-MONITOR] $(date '+%H:%M:%S') - .safetensors count:"
+                echo "🔍 [FILE-MONITOR]   /workspace/downloads_tmp: $(find /workspace/downloads_tmp -name "*.safetensors" 2>/dev/null | wc -l) files"
+                echo "🔍 [FILE-MONITOR]   /workspace/models: $(find /workspace/models -name "*.safetensors" 2>/dev/null | wc -l) files"
+                
+                # Check if organizer is still running
+                if ! pgrep -f "organizer.sh" > /dev/null; then
+                    echo "🔍 [FILE-MONITOR] Organizer finished, stopping monitor"
+                    break
+                fi
+            done
+        ) &
+        
+        # Store the PID so we can kill it later
+        echo $! > /tmp/file_monitor.pid
+    fi
+}
+
+# Add this to your main() function before step 3:
+main() {
+    echo "🚀 Phoenix Entrypoint: Initializing container..."
+    
+    # ... existing steps 1 & 2 ...
+    
+    # Start file monitoring before organizer
+    monitor_file_system
+    
+    echo "  -> 3/4: Running File Organizer..."
+    source "${SCRIPT_DIR}/organizer.sh"
+    
+    # Kill the monitor after organizer completes
+    if [ -f "/tmp/file_monitor.pid" ]; then
+        kill $(cat /tmp/file_monitor.pid) 2>/dev/null || true
+        rm -f /tmp/file_monitor.pid
+    fi
+    
+    # ... rest of main function
+}
+### DEBUG: file_monitor_script.sh END
+
 # --- Cleanup Function (Non-Destructive in Testing Mode) ---
 cleanup() {
     echo "🚨 Phoenix Entrypoint: Received exit signal..."
@@ -190,6 +305,8 @@ main() {
             echo "⚠️ File organizer had issues - continuing anyway"
             total_errors=$((total_errors + 1))
         fi
+        verify_model_organization
+        monitor_file_system &
     else
         echo "  -> File Organizer: Skipped (no downloads to organize)"
     fi

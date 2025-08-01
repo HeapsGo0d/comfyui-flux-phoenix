@@ -8,7 +8,7 @@ set -euo pipefail
 
 # ─── Configuration ──────────────────────────────────────────────────────────
 # ⚠️ IMPORTANT: Update this to your Docker Hub username and image name.
-readonly IMAGE_NAME="joyc0025/comfyui-flux-phoenix:v1.2-test3"
+readonly IMAGE_NAME="joyc0025/comfyui-flux-phoenix:v2"
 readonly TEMPLATE_NAME="ComfyUI FLUX - Project Phoenix"
 readonly CUSTOM_DNS_SERVERS="${CUSTOM_DNS_SERVERS:-"8.8.8.8,1.1.1.1"}" # Default to Google and Cloudflare
 

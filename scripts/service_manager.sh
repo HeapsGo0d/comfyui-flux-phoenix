@@ -1,43 +1,80 @@
 #!/bin/bash
 # ==================================================================================
-# PHOENIX: SERVICE MANAGER SCRIPT
+# PHOENIX: ENHANCED SERVICE MANAGER SCRIPT
 # ==================================================================================
-# This script is sourced by entrypoint.sh. It is responsible for launching the
-# main application services (ComfyUI, File Browser) in the background.
+# Enhanced version that ensures FileBrowser sees all models after organization
 
 # --- Logging Function ---
 log_service() {
     echo "  [SERVICE] $1"
 }
 
-# --- Storage Linking ---
-# This is a critical step to ensure ComfyUI can access the models, inputs,
-# and outputs regardless of whether we are using persistent or ephemeral storage.
-# We will replace the default ComfyUI directories with symlinks to our STORAGE_ROOT.
+# --- Storage Linking (Enhanced) ---
 setup_storage_links() {
     log_service "Setting up storage links..."
 
-    # Ensure the target directories exist in our storage root.
-    mkdir -p "${STORAGE_ROOT}/models" "${STORAGE_ROOT}/input" "${STORAGE_ROOT}/output"
+    # Ensure ALL ComfyUI model subdirectories exist
+    local model_dirs=(
+        "checkpoints" "loras" "vae" "controlnet" 
+        "upscale_models" "embeddings" "clip" "unet"
+        "diffusion_models" "style_models"
+    )
+    
+    for dir in "${model_dirs[@]}"; do
+        mkdir -p "${STORAGE_ROOT}/models/${dir}"
+    done
+    
+    # Also ensure input/output dirs exist
+    mkdir -p "${STORAGE_ROOT}/input" "${STORAGE_ROOT}/output"
 
-    # Forcefully create symlinks. This will overwrite existing directories or symlinks.
-    # The -n flag is important to handle cases where the target is already a symlink.
+    # Create symlinks (force overwrite existing)
     ln -sfn "${STORAGE_ROOT}/models" "${COMFYUI_DIR}/models"
     ln -sfn "${STORAGE_ROOT}/input" "${COMFYUI_DIR}/input"
     ln -sfn "${STORAGE_ROOT}/output" "${COMFYUI_DIR}/output"
 
     log_service "✅ Storage links configured to point to ${STORAGE_ROOT}"
+    log_service "   Model structure: $(find ${STORAGE_ROOT}/models -type d | wc -l) directories ready"
 }
 
-# --- File Browser Launcher ---
+# --- Wait for Downloads to Complete ---
+wait_for_downloads() {
+    log_service "Checking for ongoing downloads..."
+    local max_wait=300  # 5 minutes max wait
+    local elapsed=0
+    local check_interval=5
+    
+    while [ $elapsed -lt $max_wait ]; do
+        # Check for aria2 segment files (indicates active downloads)
+        local aria_files
+        aria_files=$(find "${DOWNLOAD_TMP_DIR:-/workspace/downloads_tmp}" -name "*.aria2" 2>/dev/null | wc -l)
+        
+        # Check for python download processes
+        local hf_processes
+        hf_processes=$(pgrep -f "huggingface-cli download" | wc -l)
+        
+        if [ "$aria_files" -eq 0 ] && [ "$hf_processes" -eq 0 ]; then
+            log_service "✅ All downloads appear complete"
+            return 0
+        fi
+        
+        log_service "⏳ Downloads still active (aria2: $aria_files, hf: $hf_processes) - waiting..."
+        sleep $check_interval
+        elapsed=$((elapsed + check_interval))
+    done
+    
+    log_service "⚠️  Download wait timeout reached - proceeding anyway"
+    return 0
+}
+
+# --- Enhanced File Browser Launcher ---
 launch_file_browser() {
-    log_service "Launching File Browser..."
+    log_service "Preparing File Browser launch..."
 
     local username="${FB_USERNAME:-admin}"
     local password="${FB_PASSWORD:-}"
     local db_path="${STORAGE_ROOT}/filebrowser.db"
 
-    # If no password is provided, generate a random 16-character one.
+    # Generate password if needed
     if [ -z "$password" ]; then
         password=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
         log_service "---------------------------------------------------"
@@ -45,43 +82,133 @@ launch_file_browser() {
         log_service "---------------------------------------------------"
     fi
 
-    # Initialize the database and user if the DB file doesn't exist.
+    # Initialize database if needed
     if [ ! -f "$db_path" ]; then
         log_service "Initializing new File Browser database at ${db_path}"
         filebrowser config init --database "$db_path"
         filebrowser users add "$username" "$password" --database "$db_path" --perm.admin
+        
+        # Configure File Browser settings for better model visibility
+        filebrowser config set --database "$db_path" \
+            --branding.name "Phoenix Models" \
+            --branding.files "/workspace" \
+            --commands.after-upload "" \
+            --commands.before-save ""
     fi
 
-    # Launch File Browser in the background, serving the entire /workspace directory.
-    # We pipe its output to a logger to prepend a tag for clarity.
+    # Wait a moment for file system to settle
+    log_service "Waiting for file system to settle..."
+    sleep 3
+
+    # Launch File Browser with optimized settings
+    log_service "Launching File Browser on port 8080..."
     filebrowser --database "$db_path" \
         --address 0.0.0.0 \
         --port 8080 \
-        --root /workspace | while read -r line; do echo "  [FileBrowser] $line"; done &
+        --root /workspace \
+        --cache-dir "${STORAGE_ROOT}/.fb_cache" | while read -r line; do 
+            echo "  [FileBrowser] $line"
+        done &
     
-    log_service "✅ File Browser is starting up on port 8080."
+    # Store the PID for potential restarts
+    echo $! > "${STORAGE_ROOT}/.filebrowser.pid"
+    
+    log_service "✅ File Browser started (PID: $(cat ${STORAGE_ROOT}/.filebrowser.pid))"
 }
 
-# --- ComfyUI Launcher ---
+# --- File Browser Restart Function ---
+restart_file_browser() {
+    log_service "Restarting File Browser to refresh model view..."
+    
+    if [ -f "${STORAGE_ROOT}/.filebrowser.pid" ]; then
+        local fb_pid
+        fb_pid=$(cat "${STORAGE_ROOT}/.filebrowser.pid")
+        if kill -0 "$fb_pid" 2>/dev/null; then
+            kill "$fb_pid"
+            sleep 2
+        fi
+    fi
+    
+    launch_file_browser
+}
+
+# --- ComfyUI Launcher (Enhanced) ---
 launch_comfyui() {
     log_service "Launching ComfyUI..."
     cd "${COMFYUI_DIR}"
 
-    # Construct the final arguments for ComfyUI.
-    # The COMFY_ARGS env var is set in the Dockerfile.
+    # Enhanced launch arguments
     local launch_args="--listen 0.0.0.0 --port 8188 ${COMFY_ARGS}"
+    
+    # Add model scanning args if models exist
+    if [ -d "${STORAGE_ROOT}/models" ] && [ "$(find ${STORAGE_ROOT}/models -name '*.safetensors' -o -name '*.ckpt' | head -1)" ]; then
+        launch_args="$launch_args --extra-model-paths-config /dev/null"
+        log_service "Models detected - ComfyUI will scan: $(find ${STORAGE_ROOT}/models -name '*.safetensors' -o -name '*.ckpt' | wc -l) files"
+    fi
+
     log_service "ComfyUI launch arguments: ${launch_args}"
 
-    # Launch ComfyUI in the background.
-    # stdbuf -o0 ensures that Python's output is not buffered, so we see logs immediately.
-    stdbuf -o0 python main.py ${launch_args} | while read -r line; do echo "  [ComfyUI] $line"; done &
+    # Launch with unbuffered output
+    stdbuf -o0 python main.py ${launch_args} | while read -r line; do 
+        echo "  [ComfyUI] $line"
+    done &
     
-    log_service "✅ ComfyUI is starting up on port 8188."
+    log_service "✅ ComfyUI starting on port 8188"
 }
 
-# --- Main Orchestration ---
-log_service "Initializing service manager..."
+# --- Model Monitoring Background Task ---
+start_model_monitor() {
+    {
+        log_service "Starting background model monitor..."
+        local last_count=0
+        
+        while true; do
+            sleep 30
+            
+            if [ -d "${STORAGE_ROOT}/models" ]; then
+                local current_count
+                current_count=$(find "${STORAGE_ROOT}/models" -name '*.safetensors' -o -name '*.ckpt' | wc -l)
+                
+                if [ "$current_count" -ne "$last_count" ]; then
+                    log_service "📁 Model count changed: $last_count → $current_count"
+                    
+                    # Restart FileBrowser to refresh its view
+                    if [ "$current_count" -gt "$last_count" ]; then
+                        log_service "New models detected - refreshing FileBrowser..."
+                        restart_file_browser
+                    fi
+                    
+                    last_count=$current_count
+                fi
+            fi
+        done
+    } &
+}
+
+# --- Main Orchestration (Enhanced) ---
+log_service "Initializing enhanced service manager..."
+
+# Step 1: Set up storage structure
 setup_storage_links
-launch_file_browser
+
+# Step 2: Wait for any ongoing downloads to complete
+wait_for_downloads
+
+# Step 3: Wait a bit more for organizer to finish moving files
+log_service "Allowing time for file organization to complete..."
+sleep 5
+
+# Step 4: Launch services with proper timing
 launch_comfyui
-log_service "All services launched."
+sleep 3  # Let ComfyUI start first
+
+launch_file_browser
+sleep 2
+
+# Step 5: Start background monitor
+start_model_monitor
+
+log_service "🚀 All services launched with enhanced model visibility"
+log_service "   - ComfyUI: http://localhost:8188"
+log_service "   - FileBrowser: http://localhost:8080"
+log_service "   - Background monitor: Active"

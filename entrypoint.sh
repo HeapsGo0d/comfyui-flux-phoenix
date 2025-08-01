@@ -105,25 +105,52 @@ check_service_health() {
 
 # --- Network Health Check ---
 check_network() {
-    echo "  Checking network connectivity..."
-    local attempts=0
     local max_attempts=10
-    local target_host="google.com"
-
-    until nslookup "${target_host}" >/dev/null 2>&1; do
-        attempts=$((attempts + 1))
-        if [ $attempts -ge $max_attempts ]; then
-            echo "  ❌ Network check failed after ${max_attempts} attempts."
-            echo "     Could not resolve ${target_host}. Please check DNS and network settings."
-            # In non-interactive environments, we might want to exit.
-            # For this testing entrypoint, we'll just warn and continue.
+    local attempt=1
+    local wait_time=3
+    
+    echo "🌐 Checking network connectivity..."
+    
+    while [ $attempt -le $max_attempts ]; do
+        echo "  -> Attempt $attempt/$max_attempts: Testing connectivity..."
+        
+        # Test multiple methods for more reliable detection
+        local dns_test=false
+        local http_test=false
+        
+        # Method 1: DNS resolution test (multiple servers)
+        if nslookup google.com 8.8.8.8 >/dev/null 2>&1 || \
+           nslookup cloudflare.com 1.1.1.1 >/dev/null 2>&1; then
+            dns_test=true
+        fi
+        
+        # Method 2: HTTP connectivity test (with timeout)
+        if timeout 5 curl -s --max-time 5 https://www.google.com >/dev/null 2>&1 || \
+           timeout 5 curl -s --max-time 5 https://httpbin.org/ip >/dev/null 2>&1; then
+            http_test=true
+        fi
+        
+        # Success if either method works
+        if [ "$dns_test" = true ] || [ "$http_test" = true ]; then
+            echo "✅ Network connectivity confirmed (DNS: $dns_test, HTTP: $http_test)"
+            return 0
+        fi
+        
+        echo "❌ Network not ready (DNS: $dns_test, HTTP: $http_test)"
+        
+        if [ $attempt -eq $max_attempts ]; then
+            echo "⚠️  Network wait exhausted after $max_attempts attempts"
+            echo "   Proceeding anyway - downloads may work due to retry logic"
             return 1
         fi
-        echo "  ⚠️ Network not ready, retrying in 5 seconds... (attempt ${attempts}/${max_attempts})"
-        sleep 5
+        
+        echo "   Waiting ${wait_time}s before retry..."
+        sleep $wait_time
+        
+        # Exponential backoff (cap at 10s)
+        wait_time=$((wait_time < 10 ? wait_time + 2 : 10))
+        attempt=$((attempt + 1))
     done
-    echo "  ✅ Network is ready."
-    return 0
 }
 
 # --- Main Orchestration ---
